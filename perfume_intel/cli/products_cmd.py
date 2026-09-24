@@ -17,7 +17,7 @@ from ..core.text import output_stem
 from ..pipelines import brand_products
 from ..sources.fragrantica.models import BRAND_PERFUME_CSV_COLUMNS, BrandPerfume
 from ..sources.fragrantica.scraper import SITE
-from .options import fetch_args
+from .options import fetch_args, fetcher_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -85,8 +85,7 @@ def run(args: argparse.Namespace) -> int:
         if write_jsonl and perfumes:
             storage.save_jsonl(perfumes, jsonl_path, append=True)
 
-    fetcher = Fetcher(use_cache=not args.no_cache, delay=tuple(args.delay),
-                      respect_robots=not args.ignore_robots)
+    fetcher = Fetcher(**fetcher_kwargs(args))
     try:
         report = brand_products.crawl(fetcher, brands, skip=skip,
                                       on_brand=on_brand)

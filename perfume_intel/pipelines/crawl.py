@@ -7,12 +7,13 @@ một luồng, kể cả cách đặt tên file kết quả và cách `--resume`
 
 from __future__ import annotations
 
+import glob as globlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..core import csv_input, storage
-from ..core.text import output_stem
+from ..core.text import output_stem, url_key
 from ..sources.base import SiteScraper
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,21 @@ class CrawlOptions:
 
 
 # ------------------------------------------------------------ nơi ghi kết quả
+def _brand_files(out_dir: Path, brand: str, site: str) -> list[Path]:
+    """File kết quả đã có của một hãng.
+
+    `glob.escape` là bắt buộc: tên hãng đi thẳng vào mẫu glob, mà đầu vào đã có
+    `Viktor & Rolf`, `Victoria's Secret`... Chỉ cần một hãng kiểu
+    `Amouage [Library]` là `[...]` bị hiểu thành character class, mẫu không khớp
+    chính file của nó, và cả hãng bị crawl lại từ đầu mà không báo gì.
+
+    Không đệ quy có chủ đích: file nằm trong thư mục con là dữ liệu đã lưu trữ,
+    không phải nơi để ghi nối thêm.
+    """
+    pattern = f"{globlib.escape(brand)}_{globlib.escape(site)}_*.jsonl"
+    return list(out_dir.glob(pattern))
+
+
 def out_base_for(out_dir: Path, brand: str, site: str, resume: bool) -> Path:
     """Tên file kết quả cho một hãng: '<Tên Hãng>_<site>_<ddmmyy>'.
 
@@ -47,7 +63,7 @@ def out_base_for(out_dir: Path, brand: str, site: str, resume: bool) -> Path:
     mới theo ngày hôm nay — nếu không, resume qua ngày khác sẽ crawl lại từ đầu.
     """
     if resume:
-        existing = list(out_dir.glob(f"{brand}_{site}_*.jsonl"))
+        existing = _brand_files(out_dir, brand, site)
         if existing:
             newest = max(existing, key=lambda p: p.stat().st_mtime)
             return newest.with_suffix("")
@@ -64,7 +80,7 @@ def done_file_for(out_dir: Path, brand: str, site: str,
     """
     if opts.recrawl or opts.resume:
         return None
-    existing = list(out_dir.glob(f"{brand}_{site}_*.jsonl"))
+    existing = _brand_files(out_dir, brand, site)
     return max(existing, key=lambda p: p.stat().st_mtime) if existing else None
 
 
@@ -97,7 +113,13 @@ def crawl_urls(scraper: SiteScraper, urls: list[str],
         export = (storage.load_records(jsonl_path, scraper.record_cls)
                   if (opts.write_jsonl and opts.resume) else records)
         storage.save_csv(export, csv_path, columns=scraper.csv_columns)
-    return len(records), len(urls) - len(skip)
+
+    # Đếm đúng phần phải crawl thay vì `len(urls) - len(skip)`: file kết quả có
+    # thể chứa URL không nằm trong danh sách lần này (vd CSV đầu vào bị cắt bớt),
+    # khi đó phép trừ ra số âm và nhánh "attempted == 0 -> coi như xong" ở
+    # cli/crawl_cmd.py hiểu sai thành đã crawl hết.
+    attempted = sum(1 for u in urls if url_key(u) not in skip)
+    return len(records), attempted
 
 
 def read_pairs(scraper: SiteScraper, path: Path, opts: CrawlOptions,

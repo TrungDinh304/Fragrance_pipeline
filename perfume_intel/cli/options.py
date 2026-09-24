@@ -51,6 +51,11 @@ def fetch_args(resume: bool = True) -> argparse.ArgumentParser:
                    help="Khoảng nghỉ ngẫu nhiên giữa các request (giây)")
     p.add_argument("--no-cache", action="store_true",
                    help="Không dùng cache HTML")
+    p.add_argument("--cache-ttl", dest="cache_ttl", type=float, metavar="NGÀY",
+                   help="Coi cache cũ hơn N ngày là hết hạn và tải lại. Dùng để "
+                        "làm mới trang danh mục mà không vứt cache chi tiết chai "
+                        "đã render — việc mà --no-cache không làm được "
+                        "(mặc định: 7 ngày, bản --render là 90 ngày)")
     if resume:
         p.add_argument("--resume", action="store_true",
                        help="Bỏ qua URL đã có trong file .jsonl kết quả")
@@ -77,10 +82,24 @@ def crawl_options(args: argparse.Namespace) -> CrawlOptions:
     )
 
 
+def fetcher_kwargs(args: argparse.Namespace) -> dict:
+    """Tham số chung cho mọi Fetcher, dựng từ các cờ dòng lệnh.
+
+    Mọi lệnh phải đi qua đây — lệnh nào tự dựng `Fetcher(...)` sẽ lặng lẽ bỏ
+    qua cờ mới thêm, đúng kiểu lỗi mà cờ `--cache-ttl` sinh ra để tránh.
+    """
+    kwargs = dict(use_cache=not args.no_cache, delay=tuple(args.delay),
+                  respect_robots=not args.ignore_robots)
+    # Người dùng nhập theo NGÀY cho dễ; bên trong tính bằng giây.
+    ttl_days = getattr(args, "cache_ttl", None)
+    if ttl_days is not None:
+        kwargs["cache_ttl"] = ttl_days * 24 * 3600
+    return kwargs
+
+
 def build_fetcher(args: argparse.Namespace, scraper_cls: type[SiteScraper]) -> Fetcher:
     """Fetcher thường, hoặc BrowserFetcher với selector riêng của site khi --render."""
-    common = dict(use_cache=not args.no_cache, delay=tuple(args.delay),
-                  respect_robots=not args.ignore_robots)
+    common = fetcher_kwargs(args)
     if not args.render:
         return Fetcher(**common)
 

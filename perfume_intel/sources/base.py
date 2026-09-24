@@ -11,6 +11,7 @@ import logging
 from typing import Any, Callable
 
 from ..core.http import Fetcher
+from ..core.text import url_key
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +69,11 @@ class SiteScraper:
         `des_urls` map url nguồn -> url đích; gắn vào bản ghi TRƯỚC khi gọi
         `on_item` để file ghi ra đã có sẵn cột này.
         """
+        # `skip` là tập khoá đã chuẩn hoá (storage.load_scraped_urls), nên phải
+        # chuẩn hoá cả phía này. Bỏ url_key ở đây = mọi tra cứu trượt = crawl lại
+        # từ đầu mà không báo gì.
         skip = skip or set()
-        todo = [u for u in urls if u not in skip]
+        todo = [u for u in urls if url_key(u) not in skip]
         log.info("Bắt đầu crawl %d URL (bỏ qua %d đã có).",
                  len(todo), len(urls) - len(todo))
 

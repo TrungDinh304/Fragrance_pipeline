@@ -68,4 +68,5 @@ test:
 	$(PYTHON) tests/test_mini.py
 	$(PYTHON) tests/test_brands.py
 	$(PYTHON) tests/test_brand_products.py
+	$(PYTHON) tests/test_resume_cache.py
 	$(PYTHON) tests/test_analytics.py

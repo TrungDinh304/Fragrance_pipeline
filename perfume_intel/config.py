@@ -18,15 +18,33 @@ PROCESSED_DIR = DATA_DIR / "processed"
 # Cache HTML thô: rất nặng, luôn nằm ngoài data/ và không commit.
 CACHE_DIR = PROJECT_ROOT / ".cache" / "html"
 
+# --- Vòng đời cache -------------------------------------------------------
+# Hai loại dữ liệu, hai tuổi thọ khác nhau:
+#   - Trang khám phá (danh mục hãng, trang hãng): đây CHÍNH LÀ tín hiệu "có chai
+#     mới". Cache vĩnh viễn nghĩa là planner không bao giờ thấy chai mới, trong
+#     khi pipeline trông vẫn khoẻ mạnh.
+#   - Chi tiết chai đã render: accord/notes của một chai không đổi, mà render
+#     lại tốn ~7 giây, nên giữ lâu.
+CACHE_TTL_DISCOVERY = 7 * 24 * 3600
+CACHE_TTL_RENDERED = 90 * 24 * 3600
+
+# Trần dung lượng cache. Đo thực tế: trang chi tiết đã render ~678 KB/chai, nên
+# 150k chai ≈ 101 GB — vượt chỗ trống của ổ đĩa. Quá trần thì xoá dần theo
+# mtime cũ nhất.
+CACHE_MAX_BYTES = 40 * 1024 ** 3          # 40 GB
+CACHE_SWEEP_EVERY = 200                   # số lần ghi giữa 2 lần kiểm trần
+
+# Chặn sớm khi bị rate limit: RATE_LIMIT_BACKOFF đi hết thang mất 21 phút cho
+# MỖI url. Nếu đã dính 429 nhiều lần trong một cửa sổ ngắn thì site đang chặn
+# thật, dừng ngay thay vì ngủ tiếp.
+RATE_LIMIT_TRIP_COUNT = 4
+RATE_LIMIT_TRIP_WINDOW = 900              # giây
+
 
 def raw_dir(site: str) -> Path:
     """Nơi chứa .jsonl đã crawl của một site, vd raw_dir("fragrantica")."""
     return RAW_DIR / site
 
-
-def inputs_dir(site: str) -> Path:
-    """Nơi chứa .csv đầu vào của một site."""
-    return INPUTS_DIR / site
 
 # Lịch sự với server: nghỉ ngẫu nhiên giữa 2 request (giây).
 # Fragrantica là site nhỏ và có rate limit thật (429). Crawl dày sẽ bị chặn cả

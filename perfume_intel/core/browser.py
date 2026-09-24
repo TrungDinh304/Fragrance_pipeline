@@ -47,6 +47,10 @@ class BrowserFetcher(Fetcher):
     Cache để riêng ở `<cache>/rendered/` vì nội dung khác hẳn bản requests.
     """
 
+    # Chi tiết chai hầu như không đổi, mà render lại tốn ~7 giây — giữ lâu hơn
+    # nhiều so với trang khám phá (xem config.CACHE_TTL_*).
+    default_cache_ttl = config.CACHE_TTL_RENDERED
+
     def __init__(self, headless: bool = True, scroll: bool = False,
                  wait_selector: str | None = None,
                  ready_js: str | None = None,

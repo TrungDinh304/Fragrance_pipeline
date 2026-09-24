@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any, Iterator
 
+from .text import url_key
+
 log = logging.getLogger(__name__)
 
 
@@ -62,5 +64,13 @@ def load_records(path: Path, record_cls) -> list:
 
 
 def load_scraped_urls(path: Path) -> set[str]:
-    """URL đã có trong file kết quả — dùng để `--resume` không crawl lại."""
-    return {url for url in (raw.get("url") for raw in read_jsonl(path)) if url}
+    """URL đã có trong file kết quả — dùng để `--resume` không crawl lại.
+
+    Khoá đã chuẩn hoá qua `url_key`, nên phía so khớp BẮT BUỘC cũng phải chuẩn
+    hoá — xem `SiteScraper.scrape_many` trong sources/base.py. Sửa lệch một
+    phía thì mọi phép tra cứu đều trượt và `--resume` lặng lẽ biến thành crawl
+    lại từ đầu, không một dòng lỗi nào. `test_resume_khoa_chuan_hoa_ca_hai_phia`
+    canh đúng cặp này.
+    """
+    return {key for key in (url_key(raw.get("url")) for raw in read_jsonl(path))
+            if key}

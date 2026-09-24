@@ -13,7 +13,7 @@ from ..core.text import output_stem
 from ..pipelines import brands
 from ..sources.fragrantica.models import BRAND_CSV_COLUMNS
 from ..sources.fragrantica.scraper import SITE
-from .options import fetch_args
+from .options import fetch_args, fetcher_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +41,7 @@ def run(args: argparse.Namespace) -> int:
     if args.render:
         log.info("Danh mục hãng không cần --render, bỏ qua cờ này.")
 
-    fetcher = Fetcher(use_cache=not args.no_cache, delay=tuple(args.delay),
-                      respect_robots=not args.ignore_robots)
+    fetcher = Fetcher(**fetcher_kwargs(args))
     try:
         report = brands.crawl(fetcher, letters=args.letters,
                               only_az=args.only_az)

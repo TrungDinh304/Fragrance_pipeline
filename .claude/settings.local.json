@@ -4,7 +4,28 @@
       "Bash(python -m perfume_intel analyze --out /d/tmp/baseline_before)",
       "Read(//d/tmp/baseline_before/**)",
       "Bash(git init *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git -c core.autocrlf=false commit -q -m ' *)",
+      "Bash(cp -r data/raw data/_backup_20260924/)",
+      "Bash(cp -r data/inputs data/_backup_20260924/)",
+      "Bash(xargs echo \"  file:\")",
+      "Bash(python -c ' *)",
+      "Bash(make test *)",
+      "Bash(python tests/test_resume_cache.py)",
+      "Bash(cp perfume_intel/sources/base.py /d/tmp/base.bak)",
+      "Bash(python -)",
+      "Bash(rm -rf /d/tmp/rs*)",
+      "Bash(python -m perfume_intel products https://www.fragrantica.com/designers/Afnan.html --out /d/tmp/rs --format jsonl)",
+      "Bash(python -m perfume_intel products https://www.fragrantica.com/designers/Afnan.html --out /d/tmp/rs --format jsonl --resume)",
+      "Bash(awk '{print \"  rendered: \"$1}')",
+      "Bash(python -m perfume_intel crawl /d/tmp/rs.csv --limit 5 --out /d/tmp/det --format jsonl)",
+      "Bash(python -m perfume_intel crawl data/raw/fragrantica/afnan_products.csv --limit 5 --out /d/tmp/det --format jsonl)",
+      "Bash(python -m perfume_intel crawl data/raw/fragrantica/afnan_products.csv --limit 5 --out /d/tmp/det --format jsonl --resume)",
+      "Read(//d/tmp/**)",
+      "Bash(awk '{print \"  \"$2\": \"$1}')"
+    ],
+    "additionalDirectories": [
+      "D:\\tmp"
     ]
   }
 }
