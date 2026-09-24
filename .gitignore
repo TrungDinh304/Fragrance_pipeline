@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Dữ liệu: đầu vào của từng người mỗi khác, kết quả crawl thì rất nặng.
+data/
+# Cache HTML thô (hàng trăm MB).
+.cache/
+
+*.log
+.vscode/
+.idea/

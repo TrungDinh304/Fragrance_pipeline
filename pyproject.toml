@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perfume-intel"
+version = "0.2.0"
+description = "Crawl dữ liệu nước hoa và phân tích thị trường từ tín hiệu cộng đồng"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+]
+
+[project.optional-dependencies]
+# Chỉ cần cho `--render` (lấy when-to-wear, độ lưu hương, độ toả hương).
+# Sau khi cài chạy thêm: python -m playwright install chromium
+render = ["playwright>=1.40"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+perfume-intel = "perfume_intel.cli.app:main"
+
+[tool.setuptools.packages.find]
+include = ["perfume_intel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
