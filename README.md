@@ -54,6 +54,8 @@ make nam                             # crawl namperfume.net
 make mini                            # ghép bản mini (offline)
 make brands                          # danh mục hãng -> data/raw/fragrantica/
 make products                        # chai của từng hãng -> data/raw/fragrantica/
+make queue                           # xem tiến độ crawl
+make daily                           # chạy 1 lát ngân sách (nhỏ giọt)
 make analyze                         # phân tích -> data/processed/<ngày>/
 make test                            # toàn bộ test, không cần mạng
 ```
@@ -232,6 +234,74 @@ Vài điểm đo được trên trang thật (Afnan: 137 chai, 19 collection):
 - **Năm chưa rõ được trang ghi là `0000`**, đã đổi thành trống.
 - HTML tĩnh chứa **cả hai view** (lưới + danh sách) nên header collection xuất
   hiện hai lần; parser chỉ bám view danh sách nên không đếm đôi.
+
+## Lên lịch nhỏ giọt (orchestration)
+
+Fragrantica chặn thiết bị truy cập quá dày, nên không thể cào một mạch. Cách
+sống chung là **nhỏ giọt**: mỗi ngày đụng 1–2 hãng trong một hạn ngân sách
+request, phần còn lại để mai. Tiến độ được ghi ở mức **từng chai** nên hãng lớn
+tự tràn qua nhiều ngày và hôm sau đi tiếp đúng chỗ dừng.
+
+```powershell
+# 1. Nạp hàng đợi từ danh mục hãng đã crawl
+python -m perfume_intel queue --seed data/raw/fragrantica/brands_fragrantica_<ddmmyy>.jsonl
+
+# 2. Ghi nhận dữ liệu đã crawl từ trước, để lịch không làm lại
+python -m perfume_intel queue --import-existing
+
+# 3. Xem sẽ làm gì, không ra mạng
+python -m perfume_intel daily --dry-run
+
+# 4. Chạy một lát ngân sách
+python -m perfume_intel daily --render --budget 150 --brands 2
+
+# 5. Theo dõi
+python -m perfume_intel queue                      # tiến độ tổng
+python -m perfume_intel queue --runs               # lịch sử từng lần chạy
+python -m perfume_intel queue --brand "Dior"       # một hãng cụ thể
+```
+
+### Đăng ký chạy tự động (Windows Task Scheduler)
+
+```powershell
+.\scripts\daily_crawl.ps1 -Install            # 02:30 hằng ngày
+.\scripts\daily_crawl.ps1 -Install -At 03:00
+schtasks /Run /TN PerfumeIntel-Daily           # chạy thử ngay
+.\scripts\daily_crawl.ps1 -Uninstall
+```
+
+Log ra `data/logs/daily_<ngày>.log`. Script ép UTF-8 vì console Windows mặc định
+cp1252 sẽ làm chết log tiếng Việt. Exit code: `0` xong, `1` lỗi thường,
+`2` bị chặn.
+
+Máy tắt vào giờ hẹn thì Task Scheduler bỏ lỡ lần đó — không sao, hàng đợi vẫn
+nằm trong sổ, lần sau đi tiếp.
+
+### Sổ theo dõi
+
+`data/state/crawl_state.db` (SQLite), ba bảng:
+
+| Bảng | Nội dung |
+|---|---|
+| `brands` | mỗi hãng: đã có mục lục chưa, còn nợ bao nhiêu chai, đang nghỉ tới khi nào |
+| `perfumes` | mỗi chai: `pending` / `done` / `failed`, số bình luận (dùng để xếp ưu tiên) |
+| `runs` | mỗi lần chạy: tiêu bao nhiêu request, được bao nhiêu chai, kết thúc vì gì |
+
+Vài điểm thiết kế đáng biết:
+
+- **Đơn vị công việc là CHAI, không phải hãng.** Nếu lấy hãng làm đơn vị thì
+  Avon (1.379 chai) sẽ là một ngày 1.379 request, còn hãng nhỏ là một ngày 3
+  request — đúng cái cần tránh.
+- **Ngân sách tính TỔNG request**, kể cả request lấy mục lục. Site đếm mọi
+  request chứ không riêng request chi tiết.
+- **Ưu tiên theo tín hiệu cộng đồng.** Hãng xếp theo thứ hạng "Most Popular
+  Brands"; trong một hãng, chai nhiều bình luận đi trước. Với nhịp nhỏ giọt thì
+  THỨ TỰ quan trọng hơn tổng thời gian — phần đầu hàng đợi là phần bạn thật sự dùng.
+- **Bị chặn thì cho MỌI hãng nghỉ**, không nhảy sang hãng khác. 429 và thử thách
+  Cloudflare là tín hiệu ở mức thiết bị; đổi hãng rồi cào tiếp là hiểu sai vấn đề
+  và bị chặn sâu hơn. Hãng lỗi lẻ thì nghỉ dần lâu hơn: 6h → 24h → 72h.
+- **Chai đã có trên đĩa được ghi nhận, không tải lại.** Dữ liệu crawl từ trước
+  tự động vào sổ mà không tốn request nào.
 
 ## Ghép bản mini
 
@@ -437,6 +507,8 @@ perfume_intel/
     mini_cmd.py        lệnh mini
     brands_cmd.py      lệnh brands
     products_cmd.py    lệnh products
+    queue_cmd.py       lệnh queue (nạp hàng đợi, xem tiến độ)
+    daily_cmd.py       lệnh daily (chạy theo lịch)
     analyze_cmd.py     lệnh analyze
   core/                hạ tầng, KHÔNG biết gì về site cụ thể
     http.py            session + throttle + retry/backoff + cache đĩa + robots
@@ -453,6 +525,8 @@ perfume_intel/
     mini.py            ghép des_url bản mini với dữ liệu đã crawl
     brands.py          crawl danh mục hãng A-Z, gộp + khử trùng theo brand_url
     brand_products.py  từ trang hãng lấy danh sách chai theo collection
+    state.py           sổ theo dõi tiến độ (SQLite): hãng · chai · lần chạy
+    daily.py           một lát ngân sách: chọn việc, crawl, đánh dấu
   analytics/           pipeline phân tích, chạy offline
     dataset.py         .jsonl đã crawl -> list[Row] phẳng
     metrics.py         Row -> các bảng chỉ số (hàm thuần, test được)
@@ -488,6 +562,7 @@ python -m pytest tests/ -v     # nếu có cài pytest
 | `test_mini.py` | Ghép bản mini |
 | `test_brands.py` | Danh mục hãng: footer, mục lục A-Z, cắt section, retry, khử trùng |
 | `test_brand_products.py` | Sản phẩm của hãng: collection, `<template>`, retry, resume |
+| `test_schedule.py` | Sổ theo dõi, ngân sách, chia hãng lớn nhiều ngày, ngắt mạch |
 | `test_analytics.py` | Nạp dữ liệu, các chỉ số, xuất báo cáo |
 
 Test chạy trên file HTML thật đã lưu ở `tests/fixtures/`, **không cần mạng**.

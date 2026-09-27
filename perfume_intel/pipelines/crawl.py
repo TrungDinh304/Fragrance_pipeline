@@ -87,11 +87,15 @@ def done_file_for(out_dir: Path, brand: str, site: str,
 # ------------------------------------------------------------------ crawl URL
 def crawl_urls(scraper: SiteScraper, urls: list[str],
                des_urls: dict[str, str], out_base: Path,
-               opts: CrawlOptions) -> tuple[int, int]:
+               opts: CrawlOptions, on_item=None) -> tuple[int, int]:
     """Crawl một danh sách URL rồi ghi ra `out_base`.jsonl / .csv.
 
     Trả về (số bản ghi lấy được, số URL thực sự phải crawl). Số thứ hai bằng 0
     nghĩa là `--resume` đã bỏ qua hết — đó là thành công, không phải lỗi.
+
+    `on_item(record)` được gọi thêm sau mỗi bản ghi, NGAY SAU khi đã ghi xuống
+    đĩa. Phần lên lịch dùng nó để đánh dấu tiến độ từng chai, nên thứ tự đó là
+    quan trọng: đánh dấu xong mà dữ liệu chưa kịp ghi thì lần sau mất chai đó.
     """
     jsonl_path = out_base.with_suffix(".jsonl")
     csv_path = out_base.with_suffix(".csv")
@@ -102,11 +106,13 @@ def crawl_urls(scraper: SiteScraper, urls: list[str],
         jsonl_path.write_text("", encoding="utf-8")
 
     # Ghi từng bản ghi ngay khi có -> mất mạng giữa chừng không mất dữ liệu.
-    def on_item(record) -> None:
+    def _write(record) -> None:
         if opts.write_jsonl:
             storage.save_jsonl([record], jsonl_path, append=True)
+        if on_item is not None:
+            on_item(record)
 
-    records = scraper.scrape_many(urls, skip=skip, on_item=on_item,
+    records = scraper.scrape_many(urls, skip=skip, on_item=_write,
                                   des_urls=des_urls)
     if opts.write_csv:
         # Khi resume, CSV phải gồm cả bản ghi cũ trong JSONL, không chỉ phần mới.

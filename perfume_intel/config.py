@@ -14,6 +14,10 @@ DATA_DIR = PROJECT_ROOT / "data"
 INPUTS_DIR = DATA_DIR / "inputs"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+# Sổ theo dõi tiến độ crawl (SQLite). Không phải dữ liệu thu được, mà là trạng
+# thái của công việc: hãng nào xong, chai nào còn nợ, lần chạy nào hỏng.
+STATE_DIR = DATA_DIR / "state"
+STATE_DB = STATE_DIR / "crawl_state.db"
 
 # Cache HTML thô: rất nặng, luôn nằm ngoài data/ và không commit.
 CACHE_DIR = PROJECT_ROOT / ".cache" / "html"
@@ -39,6 +43,19 @@ CACHE_SWEEP_EVERY = 200                   # số lần ghi giữa 2 lần kiểm
 # thật, dừng ngay thay vì ngủ tiếp.
 RATE_LIMIT_TRIP_COUNT = 4
 RATE_LIMIT_TRIP_WINDOW = 900              # giây
+
+# --- Ngân sách mỗi lần chạy theo lịch ---------------------------------------
+# Fragrantica chặn thiết bị truy cập quá dày. Cách sống chung là nhỏ giọt: mỗi
+# ngày chỉ đụng vài hãng và một số request có hạn, phần còn lại để mai.
+#
+# `DAILY_BRANDS` là số hãng tối đa mỗi lần chạy; `DAILY_BUDGET` là TỔNG số
+# request tối đa (tính cả request lấy mục lục — site đếm mọi request). Hãng lớn (Avon 1.379 chai) sẽ tự tràn sang các ngày sau
+# — tiến độ được ghi lại ở mức từng chai nên hôm sau đi tiếp đúng chỗ dừng.
+DAILY_BRANDS = 2
+DAILY_BUDGET = 150
+
+# Hãng lỗi thì nghỉ bao lâu trước khi thử lại (giờ), theo số lần lỗi liên tiếp.
+BRAND_COOLDOWN_HOURS = (6, 24, 72)
 
 
 def raw_dir(site: str) -> Path:

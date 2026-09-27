@@ -1,4 +1,4 @@
-.PHONY: help crawl brands products nam mini analyze test
+.PHONY: help crawl brands products nam mini analyze queue daily test
 
 PYTHON ?= python
 CLI = $(PYTHON) -m perfume_intel
@@ -7,7 +7,7 @@ CLI = $(PYTHON) -m perfume_intel
 #     make crawl data/inputs/fragrantica
 # Các từ đứng sau tên lệnh được biến thành target rỗng để make không báo lỗi.
 FIRST := $(firstword $(MAKECMDGOALS))
-ifneq ($(filter $(FIRST),crawl brands products nam mini analyze),)
+ifneq ($(filter $(FIRST),crawl brands products nam mini analyze queue daily),)
   ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
   .PHONY: $(ARGS)
   $(eval $(ARGS):;@:)
@@ -34,6 +34,8 @@ help:
 	@echo "make products        Chai cua tung hang           -> data/raw/fragrantica/"
 	@echo "make nam   [path]    Crawl namperfume.net         -> data/raw/namperfume/"
 	@echo "make mini  [file]    Ghep ban mini voi du lieu da crawl (offline)"
+	@echo "make queue           Xem tien do crawl (so theo doi)"
+	@echo "make daily           Chay 1 lat ngan sach hom nay (nho giot)"
 	@echo "make analyze         Phan tich thi truong         -> data/processed/<ngay>/"
 	@echo "make test            Chay toan bo test (khong can mang)"
 	@echo ""
@@ -52,6 +54,13 @@ BRANDS_FILE ?= $(lastword $(wildcard data/raw/fragrantica/brands_fragrantica_*.j
 products:
 	$(CLI) products $(if $(ARGS),$(ARGS),--from-brands $(BRANDS_FILE)) $(FLAGS)
 
+# Nhỏ giọt theo lịch. BUDGET/BRANDS ghi đè mặc định trong config.py.
+queue:
+	$(CLI) queue $(if $(ARGS),$(ARGS),)
+
+daily:
+	$(CLI) daily --render $(if $(BUDGET),--budget $(BUDGET)) $(if $(BRANDS),--brands $(BRANDS)) $(if $(DELAY),--delay $(DELAY))
+
 # namperfume không cần render: dữ liệu có sẵn trong HTML.
 nam:
 	$(CLI) crawl --site namperfume $(if $(ARGS),$(ARGS),$(NAM_INPUT)) $(FLAGS)
@@ -69,4 +78,5 @@ test:
 	$(PYTHON) tests/test_brands.py
 	$(PYTHON) tests/test_brand_products.py
 	$(PYTHON) tests/test_resume_cache.py
+	$(PYTHON) tests/test_schedule.py
 	$(PYTHON) tests/test_analytics.py
