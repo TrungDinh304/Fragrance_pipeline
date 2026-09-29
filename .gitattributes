@@ -1,0 +1,12 @@
+# Script chay trong container BUOC phai la LF. Neu git checkout doi thanh CRLF
+# tren Windows thi bash trong container bao "\r: command not found" va bo lich
+# chay khong bao gio khoi dong.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+
+# Makefile: tab va LF, khong dung cho git doi.
+Makefile text eol=lf
+
+# PowerShell thi nguoc lai — giu CRLF cho quen voi Windows.
+*.ps1 text eol=crlf

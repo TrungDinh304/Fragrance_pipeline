@@ -1,4 +1,5 @@
-.PHONY: help crawl brands products nam mini analyze queue daily test
+.PHONY: help crawl brands products nam mini analyze queue daily test \
+        docker-build docker-up docker-down docker-logs docker-test docker-queue
 
 PYTHON ?= python
 CLI = $(PYTHON) -m perfume_intel
@@ -38,6 +39,14 @@ help:
 	@echo "make daily           Chay 1 lat ngan sach hom nay (nho giot)"
 	@echo "make analyze         Phan tich thi truong         -> data/processed/<ngay>/"
 	@echo "make test            Chay toan bo test (khong can mang)"
+	@echo ""
+	@echo "Docker (khong can cai Python/Chrome tren may):"
+	@echo "make docker-build    Build anh (co Google Chrome that ben trong)"
+	@echo "make docker-up       Bat bo len lich chay nen (02:30 hang ngay)"
+	@echo "make docker-logs     Xem bo len lich dang lam gi"
+	@echo "make docker-queue    Xem tien do trong container"
+	@echo "make docker-test     Chay toan bo test trong container"
+	@echo "make docker-down     Tat"
 	@echo ""
 	@echo "Bien: RECRAWL=1 RESUME=1 LIMIT=n FORMAT=both DELAY=\"15 30\""
 
@@ -80,3 +89,25 @@ test:
 	$(PYTHON) tests/test_resume_cache.py
 	$(PYTHON) tests/test_schedule.py
 	$(PYTHON) tests/test_analytics.py
+
+# --- Docker ---------------------------------------------------------------
+# Wrapper mong cho docker compose; xem README muc "Chay trong Docker".
+COMPOSE ?= docker compose
+
+docker-build:
+	$(COMPOSE) build
+
+docker-up:
+	$(COMPOSE) up -d
+
+docker-down:
+	$(COMPOSE) down
+
+docker-logs:
+	$(COMPOSE) logs -f scheduler
+
+docker-queue:
+	$(COMPOSE) run --rm cli queue
+
+docker-test:
+	$(COMPOSE) run --rm test

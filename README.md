@@ -32,6 +32,9 @@ Cài xong có lệnh `perfume-intel`. Không muốn cài thì chạy thẳng
 `python -m perfume_intel ...` — hai cách tương đương, tài liệu dưới đây dùng
 cách thứ hai.
 
+Không muốn cài gì lên máy thì dùng Docker — xem
+[Chạy trong Docker](#chạy-trong-docker). Ảnh đã có sẵn Google Chrome thật.
+
 ## Bố cục dữ liệu
 
 | Thư mục | Nội dung |
@@ -276,6 +279,59 @@ cp1252 sẽ làm chết log tiếng Việt. Exit code: `0` xong, `1` lỗi thư�
 
 Máy tắt vào giờ hẹn thì Task Scheduler bỏ lỡ lần đó — không sao, hàng đợi vẫn
 nằm trong sổ, lần sau đi tiếp.
+
+### Chạy trong Docker
+
+Cách này thay cho Task Scheduler và không cần cài Python, Playwright hay Chrome
+trên máy — ảnh đã có sẵn Google Chrome thật.
+
+```bash
+cp .env.example .env          # sửa TZ / RUN_AT / BUDGET nếu cần
+docker compose build
+docker compose up -d          # bật bộ lên lịch, chạy 02:30 hằng ngày
+
+docker compose logs -f scheduler        # xem nó đang làm gì
+docker compose run --rm cli queue       # tiến độ
+docker compose run --rm cli daily --render --budget 20   # chạy tay một lượt
+docker compose run --rm test            # toàn bộ test, không cần mạng
+docker compose down
+```
+
+Muốn biết ngay là nó hoạt động, đừng chờ tới 02:30:
+
+```bash
+RUN_ON_START=1 docker compose up   # chạy một lượt liền, để nguyên terminal mà xem
+```
+
+Ba service: `scheduler` (chạy nền, `restart: unless-stopped`), `cli` (chạy tay
+một lệnh bất kỳ), `test`. Hai cái sau nằm trong profile `cli` nên
+`docker compose up` không đụng tới.
+
+Vài điểm đã cân nhắc, để sau này không phải dò lại:
+
+- **`./data` và `./.cache` là bind mount, không phải named volume.** Trên máy này
+  sổ theo dõi và dữ liệu đã crawl đang nằm ở `./data`; dùng named volume thì
+  container khởi đầu trên một bản trống và crawl lại từ đầu.
+- **Ảnh có Google Chrome thật**, không phải Chromium đóng gói của Playwright —
+  bản đóng gói bị Cloudflare chặn 9/10 trang (xem `core/browser.py:_launch_browser`).
+  Nền là `python:3.13-slim-bookworm`, không phải ảnh của Playwright: ảnh đó kéo
+  theo Firefox và WebKit không dùng tới, mà lại chỉ có Python 3.12.
+- **`shm_size: 1gb`.** `/dev/shm` mặc định 64 MB, Chrome chết giữa trang trên
+  những trang nặng như Fragrantica.
+- **Lỗi không làm container thoát.** Với `restart: unless-stopped`, thoát
+  non-zero nghĩa là Docker bật lại ngay và cào tiếp liền tay — đúng thứ mà cơ chế
+  nhỏ giọt tồn tại để tránh. Script ghi log rồi chờ lượt sau.
+- **Container dùng chung IP với máy host.** Chặn của Fragrantica là ở mức thiết
+  bị/IP, nên chạy song song cả lịch trong Docker lẫn Task Scheduler là tự nhân
+  đôi số request. Chọn một.
+- **Chrome trong container là bản Linux, còn `config.USER_AGENT` khai Windows.**
+  Chuỗi UA bị ghi đè nên JS thấy Windows, nhưng client hints
+  (`Sec-CH-UA-Platform`) vẫn nói Linux — hai thứ không khớp nhau. Ba request thử
+  đều qua, nhưng nếu tỉ lệ 403 trong Docker cao hơn hẳn khi chạy trực tiếp thì
+  đây là chỗ đầu tiên nên nhìn.
+- **Mỗi lần chỉ nên có một tiến trình ghi sổ.** SQLite mở ở chế độ WAL và có
+  `timeout=30` nên đọc chồng nhau thì ổn, nhưng hai lượt `daily` cùng lúc là tự
+  tạo tranh chấp không cần thiết.
 
 ### Sổ theo dõi
 

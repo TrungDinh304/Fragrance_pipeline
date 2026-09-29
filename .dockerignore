@@ -1,0 +1,23 @@
+# Build context: chỉ code, không dữ liệu.
+#
+# `.cache/` là vài trăm MB HTML thô và `data/` chứa kết quả crawl — cả hai vào
+# container qua bind mount lúc CHẠY, không phải lúc build. Không loại trừ ở đây
+# thì mỗi lần `docker compose build` phải gửi toàn bộ số đó cho daemon.
+.cache/
+data/
+.git/
+.github/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+*.log
+.vscode/
+.idea/
+.claude/
+
+# tests/fixtures/ KHÔNG bị loại: service `test` chạy offline nhờ đúng mấy file
+# đó. Bỏ chúng là container build xong nhưng không test được gì.

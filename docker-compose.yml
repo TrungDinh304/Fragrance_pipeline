@@ -1,0 +1,65 @@
+name: perfume-intel
+
+# Cấu hình dùng chung. Chỉ `scheduler` chạy nền; hai service còn lại nằm trong
+# profile `cli` nên `docker compose up` không đụng tới chúng.
+x-app: &app
+  build:
+    context: .
+  image: perfume-intel:0.2.0
+  working_dir: /app
+  volumes:
+    # BIND MOUNT, không phải named volume: trên máy này đã có sẵn sổ theo dõi và
+    # dữ liệu đã crawl trong ./data. Dùng named volume là container chạy trên
+    # một bản trống rồi crawl lại từ đầu, còn dữ liệu cũ thì host vẫn thấy mà
+    # container không.
+    - ./data:/app/data
+    # Cache HTML thô. Có trần dung lượng do config.CACHE_MAX_BYTES lo, không
+    # phải Docker — để ngoài data/ vì không phải dữ liệu thu được.
+    - ./.cache:/app/.cache
+  # /dev/shm mặc định của Docker là 64 MB. Chrome dùng shm cho bộ nhớ render và
+  # sẽ chết giữa trang ("Target closed") trên các trang nặng như Fragrantica.
+  shm_size: 1gb
+
+services:
+  # --- chạy nền: nhỏ giọt mỗi ngày --------------------------------------------
+  scheduler:
+    <<: *app
+    container_name: perfume-intel-scheduler
+    entrypoint: ["bash", "scripts/docker/scheduler.sh"]
+    restart: unless-stopped
+    # Script tự thoát khi nhận SIGTERM nên không cần chờ lâu; nhưng nếu đang
+    # giữa một lượt crawl thì cho nó ít giây để đóng browser cho gọn.
+    stop_grace_period: 30s
+    environment:
+      # Giờ trong container phải là giờ bạn nghĩ, không thì "02:30" là 02:30 UTC
+      # tức 09:30 sáng ở VN — giờ máy đang được dùng.
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      RUN_AT: ${RUN_AT:-02:30}
+      # 1 = chạy một lượt ngay khi container bật, để kiểm chứng luôn thay vì
+      # chờ tới hôm sau mới biết có hoạt động không.
+      RUN_ON_START: ${RUN_ON_START:-0}
+      RENDER: ${RENDER:-1}
+      BUDGET: ${BUDGET:-}
+      BRANDS: ${BRANDS:-}
+      DELAY: ${DELAY:-}
+
+  # --- chạy tay một lệnh bất kỳ -----------------------------------------------
+  #   docker compose run --rm cli queue
+  #   docker compose run --rm cli daily --render --budget 20
+  #   docker compose run --rm cli analyze
+  cli:
+    <<: *app
+    profiles: ["cli"]
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+
+  # --- toàn bộ test, không cần mạng -------------------------------------------
+  #   docker compose run --rm test
+  test:
+    <<: *app
+    profiles: ["cli"]
+    entrypoint: ["make"]
+    command: ["test"]
+    # Test chạy trên fixture đã đóng vào ảnh; không cho nó thấy dữ liệu thật để
+    # một bài test viết sai đường dẫn không thể làm hỏng sổ theo dõi.
+    volumes: []

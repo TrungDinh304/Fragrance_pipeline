@@ -12,3 +12,6 @@ data/
 *.log
 .vscode/
 .idea/
+
+# .env cua Docker Compose: cau hinh rieng tung may.
+.env
