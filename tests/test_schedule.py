@@ -408,10 +408,6 @@ def test_tien_do_dem_dung():
         assert p["brands_products_done"] == 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(run(globals()))
-
-
 # ------------------------------------------------- ngưỡng bình luận
 def _mixed(n_cao=3, n_thap=4):
     """Chai chia hai nhóm: nhóm nhiều bình luận và nhóm gần như không ai bàn."""
@@ -513,7 +509,12 @@ def test_mac_dinh_la_5():
 def test_daily_khong_crawl_chai_duoi_nguong():
     """Chạy thật một lát ngân sách: chai dưới ngưỡng phải còn nguyên pending."""
     with _Store() as s:
-        s.state.seed_brands(brand_rows())
+        # CHỈ nạp Afnan: `brand_rows()` còn có Dior với popular_rank 2, mà ưu
+        # tiên xếp theo thứ hạng phổ biến nên Dior được chọn trước — rồi
+        # FakeFetcher trả fixture Afnan cho trang designer của Dior và nạp
+        # nhầm 137 chai. Lỗi của fixture, không phải của tính năng.
+        s.state.seed_brands([{"brand_url": AFNAN, "brand_name": "Afnan",
+                              "popular_rank": 1}])
         key = s.state.brand_key_for(AFNAN)
         s.state.seed_perfumes(key, _mixed(n_cao=2, n_thap=4))
         s.state.mark_products(key, ok=True)
@@ -525,3 +526,7 @@ def test_daily_khong_crawl_chai_duoi_nguong():
         p = s.state.progress(min_comments=5)
         assert p["perfumes_done"] == 2, f"crawl nhầm số lượng: {p}"
         assert p["pending_below"] == 4, "chai dưới ngưỡng bị đụng tới"
+
+
+if __name__ == "__main__":
+    raise SystemExit(run(globals()))

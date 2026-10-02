@@ -446,6 +446,19 @@ Vài điểm thiết kế đáng biết:
 - **Ưu tiên theo tín hiệu cộng đồng.** Hãng xếp theo thứ hạng "Most Popular
   Brands"; trong một hãng, chai nhiều bình luận đi trước. Với nhịp nhỏ giọt thì
   THỨ TỰ quan trọng hơn tổng thời gian — phần đầu hàng đợi là phần bạn thật sự dùng.
+- **Bỏ hẳn phần đuôi: `--min-comments`, mặc định 5.** Đo trên 7.938 chai trong
+  sổ, ngưỡng 5 giữ lại 31% số chai nhưng mang theo **96,3% toàn bộ lượng bình
+  luận**; 37,6% số chai có đúng 0 bình luận. Đây là khác biệt 53 ngày so với 16
+  ngày, đổi lấy 3,7% tín hiệu.
+
+  | ngưỡng | số chai | % bình luận giữ được | ngày @150/ngày |
+  |---|---|---|---|
+  | 0 | 7.938 | 100% | 53 |
+  | **5** | **2.442** | **96,3%** | **16** |
+  | 20 | 982 | 85,9% | 7 |
+
+  Ngưỡng KHÔNG đổi thứ tự ưu tiên — nó cho phép *dừng sớm*. Đặt
+  `--min-comments 0` để crawl tất cả.
 - **Bị chặn thì cho MỌI hãng nghỉ**, không nhảy sang hãng khác. 429 và thử thách
   Cloudflare là tín hiệu ở mức thiết bị; đổi hãng rồi cào tiếp là hiểu sai vấn đề
   và bị chặn sâu hơn. Hãng lỗi lẻ thì nghỉ dần lâu hơn: 6h → 24h → 72h.
