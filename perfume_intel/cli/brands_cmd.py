@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core.bronze import BRAND
 from ..core import storage
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..core.text import output_stem
@@ -58,7 +59,8 @@ def run(args: argparse.Namespace) -> int:
         log.error("Không lấy được hãng nào.")
         return 1
 
-    out_base = args.out or (config.raw_dir(SITE) / output_stem("brands", SITE))
+    out_base = args.out or (config.raw_dir(SITE, BRAND)
+                            / output_stem("brands", SITE))
     if args.format in ("jsonl", "both"):
         storage.save_jsonl(report.brands, out_base.with_suffix(".jsonl"))
     if args.format in ("csv", "both"):

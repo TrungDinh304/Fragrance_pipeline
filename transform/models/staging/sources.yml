@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: silver
+    description: >
+      Bảng Parquet do `perfume-intel silver` sinh ra. dbt KHÔNG đọc JSONL thô:
+      việc khử trùng và đặt kiểu đã xong ở tầng silver và có test riêng, nên ở
+      đây chỉ còn phần biến đổi.
+    meta:
+      external_location: "../data/silver/{name}.parquet"
+    tables:
+      - name: perfumes
+      - name: perfume_accords
+      - name: perfume_notes
+      - name: perfume_wear
+      - name: brands
+      - name: brand_perfumes
+      - name: market

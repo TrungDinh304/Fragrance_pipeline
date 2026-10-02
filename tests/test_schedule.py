@@ -231,6 +231,10 @@ class FakeScraper(FragranticaScraper):
         return Perfume(url=url, name="chai", brand="Afnan")
 
 
+# Ghi chu cho ba test ben duoi: tu khi `DAILY_MIN_COMMENTS` mac dinh la 5, moi
+# loi goi `run_once` khong khai `min_comments` se BO phan chai it binh luan.
+# Nhung test kiem ngan sach / tran ngay / lich su chay phai khai ro
+# `min_comments=0`, neu khong chung dang kiem lan hai thu cung mot luc.
 def _seeded(store, n_perfumes=10):
     """Sổ đã có Afnan kèm mục lục, để tập trung kiểm phần chi tiết."""
     store.state.seed_brands([{"brand_url": AFNAN, "brand_name": "Afnan",
@@ -261,7 +265,7 @@ def test_hang_lon_tran_sang_lan_sau():
 
         tong = 0
         for _ in range(3):
-            r = daily.run_once(s.state, FakeScraper(), budget=4, max_brands=1,
+            r = daily.run_once(s.state, FakeScraper(), budget=4, max_brands=1, min_comments=0,
                                out_dir=s.dir)
             tong += r.perfumes_done
 
@@ -274,7 +278,7 @@ def test_khong_crawl_lai_chai_da_co():
     """Lần chạy thứ hai không được tiêu request cho chai đã xong."""
     with _Store() as s:
         _seeded(s, 4)
-        daily.run_once(s.state, FakeScraper(), budget=4, max_brands=1,
+        daily.run_once(s.state, FakeScraper(), budget=4, max_brands=1, min_comments=0,
                        out_dir=s.dir)
 
         lan2 = FakeScraper()
@@ -303,7 +307,7 @@ def test_chai_co_san_tren_dia_duoc_ghi_nhan_khong_phai_loi():
 
         scraper = FakeScraper()
         report = daily.run_once(s.state, scraper, budget=10, max_brands=1,
-                                out_dir=s.dir)
+                                min_comments=0, out_dir=s.dir)
 
         p = s.state.progress()
         assert p["perfumes_done"] == 3
@@ -375,9 +379,9 @@ def test_hang_doi_trong_thi_khong_ra_mang():
 def test_ghi_lai_tung_lan_chay():
     with _Store() as s:
         _seeded(s, 6)
-        daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1,
+        daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1, min_comments=0,
                        out_dir=s.dir)
-        daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1,
+        daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1, min_comments=0,
                        out_dir=s.dir)
 
         runs = s.state.recent_runs(5)
@@ -406,3 +410,118 @@ def test_tien_do_dem_dung():
 
 if __name__ == "__main__":
     raise SystemExit(run(globals()))
+
+
+# ------------------------------------------------- ngưỡng bình luận
+def _mixed(n_cao=3, n_thap=4):
+    """Chai chia hai nhóm: nhóm nhiều bình luận và nhóm gần như không ai bàn."""
+    cao = [BrandPerfume(
+        perfume_url=f"https://www.fragrantica.com/perfume/Afnan/Hi{i}-{i}.html",
+        perfume_id=f"h{i}", perfume_name=f"Hot {i}", brand_name="Afnan",
+        brand_url=AFNAN, comments=100 - i) for i in range(n_cao)]
+    thap = [BrandPerfume(
+        perfume_url=f"https://www.fragrantica.com/perfume/Afnan/Lo{i}-{i}.html",
+        perfume_id=f"l{i}", perfume_name=f"Cold {i}", brand_name="Afnan",
+        brand_url=AFNAN, comments=i) for i in range(n_thap)]      # 0,1,2,3
+    return cao + thap
+
+
+def test_nguong_binh_luan_cat_phan_duoi():
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed())
+
+        assert len(s.state.pending_perfumes(key, 99, min_comments=0)) == 7
+        assert len(s.state.pending_perfumes(key, 99, min_comments=5)) == 3
+
+
+def test_nguong_khong_doi_thu_tu_uu_tien():
+    """Ngưỡng chỉ CẮT phần đuôi, không đảo thứ tự: chai nhiều bình luận vẫn
+    đi trước."""
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed())
+        todo = s.state.pending_perfumes(key, 3, min_comments=5)
+        assert [k for k, _ in todo] == [
+            k for k, _ in s.state.pending_perfumes(key, 3, min_comments=0)]
+
+
+def test_hang_chi_con_chai_duoi_nguong_thi_khong_duoc_chon():
+    """Đây là chỗ dễ sai nhất của cả tính năng.
+
+    Nếu chỉ lọc ở `pending_perfumes` mà quên lọc ở `next_brands`, thì một hãng
+    còn 300 chai pending nhưng toàn dưới ngưỡng vẫn được chọn, rồi lượt chạy
+    tiêu mất một suất hãng mà không crawl được gì — và `--dry-run` báo số nợ sai.
+    """
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed(n_cao=2, n_thap=5))
+        s.state.mark_products(key, ok=True)
+        for pkey, _ in s.state.pending_perfumes(key, 99, min_comments=5):
+            s.state.mark_perfume(pkey, ok=True)
+
+        # Vẫn còn 5 chai pending, nhưng đều dưới ngưỡng.
+        assert s.state.progress()["perfumes_pending"] == 5
+        chon = [b.brand_name for b in s.state.next_brands(5, min_comments=5)]
+        assert "Afnan" not in chon, f"vẫn chọn hãng không còn việc: {chon}"
+        # Hạ ngưỡng xuống 0 thì nó phải quay lại hàng đợi.
+        assert "Afnan" in [b.brand_name
+                           for b in s.state.next_brands(5, min_comments=0)]
+
+
+def test_so_con_no_bao_theo_dung_nguong():
+    """`--dry-run` in `brand.pending`; số đó phải là phần THẬT SỰ sẽ crawl."""
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed(n_cao=3, n_thap=4))
+        s.state.mark_products(key, ok=True)
+        work = {b.brand_name: b for b in s.state.next_brands(5, min_comments=5)}
+        assert work["Afnan"].pending == 3, work["Afnan"].pending
+
+
+def test_progress_tach_phan_bi_nguong_bo_qua():
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed(n_cao=3, n_thap=4))
+        p = s.state.progress(min_comments=5)
+        assert p["pending_above"] == 3
+        assert p["pending_below"] == 4
+        assert p["pending_above"] + p["pending_below"] == p["perfumes_pending"]
+
+
+def test_nguong_0_giu_nguyen_hanh_vi_cu():
+    """Hạ về 0 phải trả lại đúng hành vi trước khi có tính năng này."""
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed())
+        p = s.state.progress(min_comments=0)
+        assert p["pending_above"] == p["perfumes_pending"]
+        assert p["pending_below"] == 0
+
+
+def test_mac_dinh_la_5():
+    """Mặc định đổi hành vi, nên nó phải được canh bằng một test."""
+    assert config.DAILY_MIN_COMMENTS == 5
+
+
+def test_daily_khong_crawl_chai_duoi_nguong():
+    """Chạy thật một lát ngân sách: chai dưới ngưỡng phải còn nguyên pending."""
+    with _Store() as s:
+        s.state.seed_brands(brand_rows())
+        key = s.state.brand_key_for(AFNAN)
+        s.state.seed_perfumes(key, _mixed(n_cao=2, n_thap=4))
+        s.state.mark_products(key, ok=True)
+
+        scraper = FakeScraper()
+        report = daily.run_once(s.state, scraper, budget=10, max_brands=1,
+                                out_dir=s.dir / "out", min_comments=5)
+        assert report.ok
+        p = s.state.progress(min_comments=5)
+        assert p["perfumes_done"] == 2, f"crawl nhầm số lượng: {p}"
+        assert p["pending_below"] == 4, "chai dưới ngưỡng bị đụng tới"

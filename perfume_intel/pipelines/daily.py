@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 from ..core import storage
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..sources.fragrantica.parsers import parse_brand_perfumes
@@ -126,9 +127,9 @@ def _fetch_products(fetcher: Fetcher, state: CrawlState, brand,
 
 def _crawl_details(scraper: FragranticaScraper, state: CrawlState, brand,
                    outcome: BrandOutcome, budget: _Budget, out_dir: Path,
-                   opts: CrawlOptions) -> None:
+                   opts: CrawlOptions, min_comments: int = 0) -> None:
     """Crawl chi tiết các chai còn nợ của một hãng, trong hạn ngân sách."""
-    todo = state.pending_perfumes(brand.brand_key, budget.left)
+    todo = state.pending_perfumes(brand.brand_key, budget.left, min_comments)
     if not todo:
         return
 
@@ -183,9 +184,10 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
              budget: int = config.DAILY_BUDGET,
              max_brands: int = config.DAILY_BRANDS,
              out_dir: Path | None = None,
-             fmt: str = "jsonl") -> DailyReport:
+             fmt: str = "jsonl",
+             min_comments: int = config.DAILY_MIN_COMMENTS) -> DailyReport:
     """Chạy một lát ngân sách. `scraper.fetcher` dùng cho cả mục lục lẫn chi tiết."""
-    out_dir = out_dir or config.raw_dir(SITE)
+    out_dir = out_dir or config.raw_dir(SITE, bronze.PERFUME)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     report = DailyReport(budget=budget)
@@ -193,7 +195,7 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
     counter = _Budget(budget)
     opts = CrawlOptions(format=fmt, resume=True)
 
-    brands = state.next_brands(max_brands)
+    brands = state.next_brands(max_brands, min_comments)
     if not brands:
         log.info("Hàng đợi trống (hoặc mọi hãng đang nghỉ) — không có gì làm.")
         state.finish_run(report.run_id, requests_used=0, brands_touched=0,
@@ -201,8 +203,9 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
                          stopped_reason=report.stopped_reason)
         return report
 
-    log.info("Lần chạy %s — ngân sách %d request, tối đa %d hãng.",
-             report.run_id, budget, max_brands)
+    log.info("Lần chạy %s — ngân sách %d request, tối đa %d hãng%s.",
+             report.run_id, budget, max_brands,
+             f", bỏ chai dưới {min_comments} bình luận" if min_comments else "")
 
     try:
         for brand in brands:
@@ -219,10 +222,12 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
                 if not _fetch_products(scraper.fetcher, state, brand,
                                        outcome, counter, out_dir):
                     continue
-                brand = next((b for b in state.next_brands(max_brands)
+                brand = next((b for b in state.next_brands(max_brands,
+                                                           min_comments)
                               if b.brand_key == brand.brand_key), brand)
 
-            _crawl_details(scraper, state, brand, outcome, counter, out_dir, opts)
+            _crawl_details(scraper, state, brand, outcome, counter,
+                           out_dir, opts, min_comments)
             detail = state.brand_detail(brand.brand_url)
             outcome.pending_left = detail["perfumes_pending"] if detail else 0
     except (RateLimited, Blocked) as exc:

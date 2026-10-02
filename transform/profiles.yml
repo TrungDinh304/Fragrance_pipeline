@@ -1,0 +1,10 @@
+# Đường dẫn tương đối tính từ thư mục chạy dbt (transform/).
+perfume_intel:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ../data/warehouse/perfume.duckdb
+      threads: 4
+      # Nạp sẵn các bảng Parquet của tầng silver thành view để staging dùng.
+      extensions: []

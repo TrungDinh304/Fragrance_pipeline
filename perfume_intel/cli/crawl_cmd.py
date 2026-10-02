@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core.bronze import PERFUME
 from ..core import csv_input
 from ..core.csv_input import read_urls_file
 from ..core.http import Blocked, RateLimited
@@ -121,7 +122,7 @@ def run(args: argparse.Namespace) -> int:
             if len(args.source) > 1:
                 log.error("Chỉ nhận 1 thư mục mỗi lần chạy.")
                 return 1
-            out_dir = opts.out or config.raw_dir(scraper.site)
+            out_dir = opts.out or config.raw_dir(scraper.site, PERFUME)
             return crawl_directory(scraper, folders[0], out_dir, opts)
 
         if not args.source and not args.designer:
@@ -136,7 +137,8 @@ def run(args: argparse.Namespace) -> int:
             log.error("Không có URL nào để crawl.")
             return 1
 
-        out_base = opts.out or config.raw_dir(scraper.site) / scraper.site
+        out_base = (opts.out
+                    or config.raw_dir(scraper.site, PERFUME) / scraper.site)
         count, attempted = crawl_urls(scraper, urls, des_urls, out_base, opts)
         log.info("Xong: %d/%d bản ghi.", count, attempted)
         if attempted == 0:

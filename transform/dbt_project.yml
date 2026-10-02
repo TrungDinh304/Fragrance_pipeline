@@ -1,0 +1,36 @@
+# Dự án dbt cho tầng gold/marts.
+#
+# Nguồn vào là các file Parquet do `perfume-intel silver` sinh ra, KHÔNG phải
+# JSONL thô. Nhờ vậy dbt chỉ phải lo phần biến đổi; việc khử trùng và đặt kiểu
+# đã xong ở tầng silver và được test riêng.
+name: perfume_intel
+version: "1.0.0"
+config-version: 2
+profile: perfume_intel
+
+model-paths: ["models"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages"]
+# target-path cố ý KHÔNG khai ở đây: dbt 1.12 đã bỏ nó. Để dbt dùng mặc định
+# `transform/target/`, và KHÔNG trỏ vào data/: thư mục target là rác build, lại
+# chứa cache parse theo đường dẫn tuyệt đối. Đặt nó trong data/ (vốn là bind
+# mount) thì container đọc nhầm cache của host rồi chết với
+# `KeyError: dbt_duckdb://macros/catalog.sql`. Đã gặp đúng như vậy.
+
+models:
+  perfume_intel:
+    staging:
+      # View: chỉ đổi tên/ép kiểu, không đáng tốn chỗ lưu.
+      +materialized: view
+    marts:
+      # Table: marts được đọc đi đọc lại, và phải chụp lại được trạng thái.
+      +materialized: table
+
+vars:
+  # "Số vote ảo" của mốc chung khi hiệu chỉnh điểm. Nhóm phải có nhiều vote hơn
+  # chừng này thì điểm riêng của nó mới lấn át được mốc. Khớp
+  # analytics/metrics.py:_weighted_rating(prior_votes=500).
+  prior_votes: 500
+  # Note xuất hiện dưới ngần này chai thì bỏ khỏi bảng cặp note: trên kho hiện
+  # tại có 194/551 note chỉ xuất hiện đúng 1 lần, giữ lại thì chỉ là nhiễu.
+  min_note_perfumes: 2

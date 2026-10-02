@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 from .. import config
-from ..core import storage
+from ..core import bronze, storage
 from ..pipelines.state import open_state
 from ..sources.fragrantica.models import BrandPerfume
 
@@ -33,13 +33,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                         "không crawl lại (mặc định: data/raw/fragrantica)")
     p.add_argument("--reset-failed", dest="reset_failed", action="store_true",
                    help="Cho các chai lỗi về lại pending và mở mọi hãng đang nghỉ")
+    p.add_argument("--min-comments", dest="min_comments", type=int,
+                   default=config.DAILY_MIN_COMMENTS, metavar="N",
+                   help=f"Xem tiến độ theo ngưỡng bình luận nào "
+                        f"(mặc định {config.DAILY_MIN_COMMENTS}, như lịch chạy)")
     p.add_argument("--db", type=Path, help=f"Đường dẫn sổ (mặc định: {config.STATE_DB})")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=run)
 
 
-def _print_progress(state) -> None:
-    p = state.progress()
+def _print_progress(state, min_comments: int = 0) -> None:
+    p = state.progress(min_comments)
     if not p["brands_total"]:
         print("Hàng đợi trống. Nạp bằng:")
         print("  python -m perfume_intel queue --seed "
@@ -59,6 +63,13 @@ def _print_progress(state) -> None:
         print(f"CHAI      {p['perfumes_done']:>6} / {p['perfumes_total']:<6} đã có "
               f"chi tiết ({chai_pct:.1f}%)")
         print(f"          {p['perfumes_pending']:>6} còn nợ")
+        # Không có hai dòng này thì "còn nợ 7.784" mâu thuẫn với lịch chỉ định
+        # làm 2.288 — số đúng nhưng trả lời câu hỏi khác.
+        if min_comments:
+            print(f"          {p['pending_above']:>6} trong đó sẽ crawl "
+                  f"(từ {min_comments} bình luận trở lên)")
+            print(f"          {p['pending_below']:>6} bị ngưỡng bỏ qua "
+                  f"(đặt --min-comments 0 để lấy nốt)")
         if p["perfumes_failed"]:
             print(f"          {p['perfumes_failed']:>6} lỗi "
                   f"(mở lại bằng --reset-failed)")
@@ -75,10 +86,11 @@ def _print_progress(state) -> None:
 
     # Ước lượng dựa trên nhịp thật của 7 lần chạy gần nhất, không phải lý thuyết.
     runs = [r for r in state.recent_runs(7) if r.get("perfumes_done")]
-    if runs and p["perfumes_pending"]:
+    con_no = p["pending_above"] if min_comments else p["perfumes_pending"]
+    if runs and con_no:
         nhip = sum(r["perfumes_done"] for r in runs) / len(runs)
         if nhip > 0:
-            ngay = p["perfumes_pending"] / nhip
+            ngay = con_no / nhip
             print()
             print(f"NHỊP      {nhip:.0f} chai/lần chạy ({len(runs)} lần gần nhất)")
             print(f"          còn ~{ngay:.0f} lần chạy nữa cho phần đang có trong sổ")
@@ -133,12 +145,16 @@ def _import_existing(state, folder: Path) -> int:
 
     for path in files:
         for raw in storage.read_jsonl(path):
-            if raw.get("perfume_url"):                    # BrandPerfume: mục lục
+            # Phân loại qua `bronze.classify` chứ không tự kiểm trường ở đây:
+            # trước có hai bản luật giống nhau, sửa một bên quên bên kia là sai
+            # lệch âm thầm. Giờ chỉ còn một nơi định nghĩa.
+            kind = bronze.classify(raw)
+            if kind == bronze.BRAND_PERFUME:
                 brand_url = raw.get("brand_url")
                 if brand_url:
                     theo_hang.setdefault(brand_url, []).append(
                         BrandPerfume.from_dict(raw))
-            elif raw.get("url") and not raw.get("brand_url"):   # Perfume: chi tiết
+            elif kind == bronze.PERFUME:
                 chi_tiet.append(raw["url"])
 
     hang_moi = chai_moi = 0
@@ -196,5 +212,5 @@ def run(args: argparse.Namespace) -> int:
         _print_runs(state, args.runs)
         return 0
 
-    _print_progress(state)
+    _print_progress(state, args.min_comments)
     return 0

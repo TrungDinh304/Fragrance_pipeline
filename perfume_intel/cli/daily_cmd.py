@@ -29,6 +29,11 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--brands", type=int, default=config.DAILY_BRANDS,
                    help=f"Số hãng tối đa mỗi lần chạy "
                         f"(mặc định {config.DAILY_BRANDS})")
+    p.add_argument("--min-comments", dest="min_comments", type=int,
+                   default=config.DAILY_MIN_COMMENTS, metavar="N",
+                   help=f"Bỏ chai có dưới N bình luận (mặc định "
+                        f"{config.DAILY_MIN_COMMENTS}; đặt 0 để crawl tất cả). "
+                        f"Ngưỡng 5 giữ 96%% lượng bình luận với 31%% số request")
     p.add_argument("--out", type=Path, help="Thư mục ghi kết quả "
                                            "(mặc định: data/raw/fragrantica)")
     p.add_argument("--format", choices=["csv", "jsonl", "both"], default="jsonl")
@@ -40,13 +45,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=run)
 
 
-def _dry_run(state, budget: int, max_brands: int) -> int:
-    brands = state.next_brands(max_brands)
+def _dry_run(state, budget: int, max_brands: int,
+             min_comments: int) -> int:
+    brands = state.next_brands(max_brands, min_comments)
     if not brands:
         print("Không có việc: hàng đợi trống, hoặc mọi hãng đang nghỉ.")
         return 0
 
-    print(f"Sẽ làm (ngân sách {budget} request, tối đa {max_brands} hãng):")
+    nguong = (f", bỏ chai dưới {min_comments} bình luận"
+              if min_comments else "")
+    print(f"Sẽ làm (ngân sách {budget} request, tối đa {max_brands} hãng"
+          f"{nguong}):")
     con = budget
     for b in brands:
         if not b.products_done:
@@ -67,7 +76,7 @@ def run(args: argparse.Namespace) -> int:
     state = open_state(args.db)
 
     if args.dry_run:
-        return _dry_run(state, args.budget, args.brands)
+        return _dry_run(state, args.budget, args.brands, args.min_comments)
 
     # Chi tiết chai cần --render mới có when_to_wear / độ lưu / độ toả hương.
     # Cùng một fetcher dùng cho cả mục lục (trang hãng là HTML tĩnh, browser
@@ -80,7 +89,8 @@ def run(args: argparse.Namespace) -> int:
     try:
         report = daily.run_once(state, scraper, budget=args.budget,
                                 max_brands=args.brands, out_dir=args.out,
-                                fmt=args.format)
+                                fmt=args.format,
+                                min_comments=args.min_comments)
     except (RateLimited, Blocked) as exc:
         # run_once đã tự bắt và ghi cooldown; tới đây là trường hợp lọt lưới.
         log.error("%s", exc)

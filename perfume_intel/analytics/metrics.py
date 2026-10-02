@@ -177,6 +177,44 @@ def market_gap(rows: list[Row]) -> list[dict[str, Any]]:
     } for r in missing]
 
 
+def coverage(rows: list[Row], catalog) -> list[dict[str, Any]]:
+    """Phân tích mỗi hãng đang dựa trên bao nhiêu phần của hãng đó.
+
+    KHÔNG nằm trong `METRICS` vì nó cần tham số thứ hai (danh mục hãng), còn mọi
+    chỉ số khác là `list[Row] -> list[dict]` thuần. Nhét nó vào đây thì phải đổi
+    chữ ký của cả nhóm chỉ để chiều một trường hợp.
+
+    Đây cũng là lý do thật sự để tách entity: `catalog` chính là phần dữ liệu
+    trước đây bị loader bỏ im lặng. Thiếu nó thì "Avon điểm 4,1" nghe như kết
+    luận về Avon, trong khi thực tế đó là kết luận về 12/1.379 chai của Avon.
+    """
+    by_brand = _group(rows, lambda r: r.brand)
+    names = set(by_brand)
+    for key, items in catalog.products.items():
+        for item in items:
+            if item.get("brand_name"):
+                names.add(item["brand_name"])
+            break
+
+    out = []
+    for name in names:
+        group = by_brand.get(name, [])
+        total = catalog.total_for(catalog.url_of(name))
+        done = len(group)
+        out.append({
+            "brand": name,
+            "catalog_perfumes": total or None,
+            "detailed": done,
+            # None (không phải 0) khi chưa crawl mục lục: "chưa biết tổng" khác
+            # hẳn "đã biết tổng và phủ 0%".
+            "coverage_pct": round(100 * done / total, 1) if total else None,
+            "rating_votes": sum(r.rating_count or 0 for r in group),
+        })
+    out.sort(key=lambda r: (r["catalog_perfumes"] or 0, r["detailed"]),
+             reverse=True)
+    return out
+
+
 # Đăng ký ở đây thì lệnh `analyze` tự có thêm bảng, không phải sửa CLI.
 METRICS: dict[str, Metric] = {
     "brand": by_brand,

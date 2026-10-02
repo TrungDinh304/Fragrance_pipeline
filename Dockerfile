@@ -28,7 +28,7 @@ WORKDIR /app
 # đây là thứ điều khiển một browser thật, nâng cấp nó nên là việc có chủ ý.
 COPY pyproject.toml README.md ./
 RUN mkdir -p perfume_intel && touch perfume_intel/__init__.py \
-    && pip install -e ".[render]" "playwright==1.57.0"
+    && pip install -e ".[render,warehouse,marts]" "playwright==1.57.0"
 
 # Google Chrome THẬT, không phải Chromium đóng gói. Đây không phải sở thích: đo
 # trên 10 trang Fragrantica, Chromium của Playwright qua được 1/10 (9 lần
@@ -71,6 +71,7 @@ RUN set -eux; \
     google-chrome --version
 
 COPY perfume_intel ./perfume_intel
+COPY transform ./transform
 COPY tests ./tests
 COPY scripts ./scripts
 COPY Makefile ./
@@ -79,7 +80,8 @@ COPY Makefile ./
 # --no-sandbox, mà tắt sandbox của browser để cào một site lạ là đổi ngược hướng.
 # uid 1000 để khớp user thường của host Linux — bind mount ./data phải ghi được.
 RUN useradd --create-home --uid 1000 app \
-    && mkdir -p data/raw data/inputs data/processed data/state data/logs .cache/html \
+    && mkdir -p data/raw data/inputs data/processed data/state data/logs \
+               data/silver data/warehouse .cache/html \
     && chown -R app:app /app
 
 USER app

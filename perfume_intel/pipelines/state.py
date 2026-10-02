@@ -197,18 +197,25 @@ class CrawlState:
         return added
 
     # ----------------------------------------------------------- chọn việc
-    def next_brands(self, limit: int) -> list[BrandWork]:
+    def next_brands(self, limit: int,
+                    min_comments: int = 0) -> list[BrandWork]:
         """Các hãng nên làm tiếp, ưu tiên cao trước.
 
         Bỏ qua hãng đang trong thời gian nghỉ (`blocked_until`) và hãng đã xong
         hẳn (có mục lục và không còn chai nào pending).
+
+        `min_comments` phải vào TẬN ĐÂY, không chỉ ở `pending_perfumes`: nếu chỉ
+        lọc ở bước sau thì một hãng còn 300 chai pending nhưng đều dưới ngưỡng
+        vẫn được chọn, rồi `pending_perfumes` trả về rỗng — lượt chạy tiêu mất
+        một suất hãng mà không làm gì, và `--dry-run` thì báo số nợ sai.
         """
         now = _now()
         sql = """
         SELECT b.brand_key, b.brand_url, b.brand_name, b.products_status,
                b.perfume_total,
                (SELECT COUNT(*) FROM perfumes p
-                 WHERE p.brand_key = b.brand_key AND p.status = 'pending')
+                 WHERE p.brand_key = b.brand_key AND p.status = 'pending'
+                   AND p.comments >= ?)
                AS pending
           FROM brands b
          WHERE (b.blocked_until IS NULL OR b.blocked_until <= ?)
@@ -218,25 +225,27 @@ class CrawlState:
          LIMIT ?
         """
         with self._conn() as conn:
-            rows = conn.execute(sql, (now, limit)).fetchall()
+            rows = conn.execute(sql, (min_comments, now, limit)).fetchall()
         return [BrandWork(r["brand_key"], r["brand_url"], r["brand_name"],
                           r["products_status"] == DONE, r["perfume_total"],
                           r["pending"]) for r in rows]
 
-    def pending_perfumes(self, brand_key: str, limit: int) -> list[tuple[str, str]]:
+    def pending_perfumes(self, brand_key: str, limit: int,
+                         min_comments: int = 0) -> list[tuple[str, str]]:
         """Chai còn nợ của một hãng -> [(key, url)], nhiều bình luận trước.
 
         `comments` là tín hiệu cộng đồng: chai nhiều người bàn vừa đáng lấy
-        trước, vừa là chai hay đổi số liệu nhất.
+        trước, vừa là chai hay đổi số liệu nhất. `min_comments` cắt hẳn phần
+        đuôi — xem `config.DAILY_MIN_COMMENTS`.
         """
         if limit <= 0:
             return []
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT perfume_key, perfume_url FROM perfumes"
-                " WHERE brand_key = ? AND status = 'pending'"
+                " WHERE brand_key = ? AND status = 'pending' AND comments >= ?"
                 " ORDER BY comments DESC, perfume_key LIMIT ?",
-                (brand_key, limit)).fetchall()
+                (brand_key, min_comments, limit)).fetchall()
         return [(r["perfume_key"], r["perfume_url"]) for r in rows]
 
     # ------------------------------------------------------------- đánh dấu
@@ -374,8 +383,14 @@ class CrawlState:
         return [dict(r) for r in rows]
 
     # -------------------------------------------------------------- tiến độ
-    def progress(self) -> dict:
-        """Số liệu tổng quan để lệnh `queue` in ra."""
+    def progress(self, min_comments: int = 0) -> dict:
+        """Số liệu tổng quan để lệnh `queue` in ra.
+
+        Khi `min_comments > 0`, thêm hai số: phần còn nợ ĐẠT ngưỡng (phần thật
+        sự sẽ được crawl) và phần bị ngưỡng cắt. Thiếu hai số này thì `queue`
+        báo "còn nợ 7.784" trong khi lịch chỉ định làm 2.288 — con số đúng
+        nhưng trả lời câu hỏi khác.
+        """
         with self._conn() as conn:
             def one(sql, *args):
                 return conn.execute(sql, args).fetchone()[0]
@@ -399,6 +414,13 @@ class CrawlState:
                     "SELECT COUNT(*) FROM perfumes WHERE status = ?", PENDING),
                 "perfumes_failed": one(
                     "SELECT COUNT(*) FROM perfumes WHERE status = ?", FAILED),
+                "min_comments": min_comments,
+                "pending_above": one(
+                    "SELECT COUNT(*) FROM perfumes WHERE status = ?"
+                    " AND comments >= ?", PENDING, min_comments),
+                "pending_below": one(
+                    "SELECT COUNT(*) FROM perfumes WHERE status = ?"
+                    " AND comments < ?", PENDING, min_comments),
             }
 
     def brand_detail(self, brand: str) -> dict | None:

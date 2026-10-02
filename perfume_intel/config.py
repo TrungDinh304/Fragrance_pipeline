@@ -19,6 +19,12 @@ PROCESSED_DIR = DATA_DIR / "processed"
 STATE_DIR = DATA_DIR / "state"
 STATE_DB = STATE_DIR / "crawl_state.db"
 
+# Tầng silver: cùng dữ liệu bronze nhưng đã khử trùng, có kiểu và trải phẳng
+# (Parquet). Tầng gold/marts do dbt sinh ra trong một file DuckDB.
+SILVER_DIR = DATA_DIR / "silver"
+WAREHOUSE_DIR = DATA_DIR / "warehouse"
+WAREHOUSE_DB = WAREHOUSE_DIR / "perfume.duckdb"
+
 # Cache HTML thô: rất nặng, luôn nằm ngoài data/ và không commit.
 CACHE_DIR = PROJECT_ROOT / ".cache" / "html"
 
@@ -54,13 +60,39 @@ RATE_LIMIT_TRIP_WINDOW = 900              # giây
 DAILY_BRANDS = 2
 DAILY_BUDGET = 150
 
+# Bỏ qua chai có ít hơn ngần này bình luận.
+#
+# Đo trên 7.938 chai đang trong sổ: ngưỡng 5 giữ lại 31% số chai nhưng mang theo
+# 96,3% TOÀN BỘ lượng bình luận. 2.987 chai (37,6%) có đúng 0 bình luận — crawl
+# chúng là tiêu request để lấy về số không.
+#
+#   ngưỡng   số chai   % bình luận giữ được   ngày @150/ngày
+#        0      7938                  100%               53
+#        5      2442                 96,3%               16
+#       20       982                 85,9%                7
+#
+# Đặt 0 để crawl tất cả. Ngưỡng này KHÔNG đổi thứ tự ưu tiên (vốn đã xếp theo
+# `comments` giảm dần) — nó cho phép DỪNG SỚM thay vì cào nốt phần đuôi dài mà
+# không ai bàn tới.
+DAILY_MIN_COMMENTS = 5
+
 # Hãng lỗi thì nghỉ bao lâu trước khi thử lại (giờ), theo số lần lỗi liên tiếp.
 BRAND_COOLDOWN_HOURS = (6, 24, 72)
 
 
-def raw_dir(site: str) -> Path:
-    """Nơi chứa .jsonl đã crawl của một site, vd raw_dir("fragrantica")."""
-    return RAW_DIR / site
+def raw_dir(site: str, kind: str | None = None) -> Path:
+    """Nơi chứa .jsonl đã crawl của một site.
+
+        raw_dir("fragrantica")              -> data/raw/fragrantica
+        raw_dir("fragrantica", "perfumes")  -> data/raw/fragrantica/perfumes
+
+    `kind` là một trong `core.bronze.KINDS`. Mỗi loại bản ghi một thư mục, vì ba
+    loại (chi tiết chai / danh mục hãng / mục lục chai) có khoá chính khác nhau;
+    để chung một chỗ thì phía đọc phải lọc, và đã có lúc lọc im lặng mất 97% số
+    dòng. Xem `core/bronze.py`.
+    """
+    base = RAW_DIR / site
+    return base / kind if kind else base
 
 
 # Lịch sự với server: nghỉ ngẫu nhiên giữa 2 request (giây).

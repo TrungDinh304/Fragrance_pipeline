@@ -41,6 +41,8 @@ Không muốn cài gì lên máy thì dùng Docker — xem
 |---|---|
 | `data/inputs/<site>/` | File CSV chứa link cần crawl (bạn tự bỏ vào) |
 | `data/raw/<site>/` | Kết quả crawl, mỗi hãng một file `.jsonl` theo ngày |
+| `data/silver/` | Tầng silver: Parquet đã khử trùng, có kiểu |
+| `data/warehouse/` | Tầng gold: mart do dbt dựng (DuckDB) |
 | `data/processed/` | Đầu ra của `analyze` và `mini` |
 | `data/scratch/` | File chạy thử lặt vặt, không ai đọc tới |
 | `.cache/html/` | HTML thô đã tải (rất nặng, xoá được bất cứ lúc nào) |
@@ -238,6 +240,95 @@ Vài điểm đo được trên trang thật (Afnan: 137 chai, 19 collection):
 - HTML tĩnh chứa **cả hai view** (lưới + danh sách) nên header collection xuất
   hiện hai lần; parser chỉ bám view danh sách nên không đếm đôi.
 
+## Kho phân tích: silver (Parquet) và gold (dbt + DuckDB)
+
+Ba tầng, mỗi tầng trả lời một loại câu hỏi khác nhau:
+
+| Tầng | Dạng | Dùng để |
+|---|---|---|
+| bronze | JSONL thô, mỗi hãng một file theo ngày | ghi khi crawl, không mất gì |
+| **silver** | Parquet đã khử trùng, có kiểu, trải phẳng | hỏi bằng SQL |
+| **gold** | bảng do dbt dựng, trong một file DuckDB | chỉ số có kiểm thử |
+
+```powershell
+pip install -e ".[warehouse]"      # chỉ cần duckdb (~22 MB, không kéo gói nào khác)
+python -m perfume_intel silver     # bronze -> data/silver/*.parquet
+
+python -m perfume_intel silver --sql "
+  SELECT b.brand_name, COUNT(*) tong, COUNT(p.perfume_key) da_crawl
+  FROM brand_perfumes b LEFT JOIN perfumes p USING (perfume_key)
+  GROUP BY 1 ORDER BY 2 DESC LIMIT 5"
+```
+
+### Tầng silver làm đúng ba việc
+
+1. **Khử trùng** — mỗi chai một dòng, giữ bản `scraped_at` mới nhất
+   (789 dòng thô → 629 chai).
+2. **Đặt kiểu** — `year` là INTEGER, `rating` là DOUBLE. Để nguyên chuỗi thì
+   `"999" > "2015"` và mọi phép so sánh năm đều sai.
+3. **Trải phẳng cái lồng nhau** — và đây mới là việc đáng giá.
+
+Bảy bảng, 31.659 dòng, **1,2 MB Parquet** (so với 11 MB JSONL):
+
+```
+perfumes         629   chi tiết chai, một dòng một chai
+perfume_accords 5347   DÀI: một dòng một (chai, accord) kèm độ mạnh
+perfume_notes   5738   DÀI: một dòng một (chai, tầng, note)
+perfume_wear    3768   DÀI: một dòng một (chai, trục hoàn cảnh)
+brands          8235   danh mục hãng
+brand_perfumes  7938   mục lục chai của hãng
+market             4   giá namperfume
+```
+
+Khi accord còn nằm trong mảng JSON, câu *“accord nào phổ biến dần lên theo năm”*
+bắt buộc phải viết bằng Python. Ở dạng bảng dài nó là một câu `GROUP BY`.
+
+### Tầng gold: marts bằng dbt
+
+```powershell
+pip install -e ".[marts]"          # nặng hơn hẳn: ~35 gói
+make marts                          # dbt build -> data/warehouse/perfume.duckdb
+```
+
+Năm mart: `mart_brand`, `mart_accord`, `mart_accord_occasion`, `mart_coverage`,
+`mart_note_pairs`. Kèm 17 test dbt (khoá duy nhất, không NULL, giá trị hợp lệ)
+và 3 test tự viết — một trong số đó kiểm *thị phần chú ý của mọi hãng cộng lại
+phải ra 100%*, thứ sẽ sai âm thầm nếu mẫu số bị tính trên một tập con.
+
+**`analytics/metrics.py` cố ý KHÔNG đổi một dòng — nó là bộ đối chứng.**
+`tests/test_warehouse.py` so từng dòng giữa mart và bản Python:
+
+```
+mart_brand      Python   80 hãng   dbt   80 hãng   LỆCH 0
+mart_accord     Python   64        dbt   64        LỆCH 0
+mart_coverage   Python  437        dbt  437        LỆCH 0
+```
+
+Công thức hiệu chỉnh Bayes viết lại bằng SQL rất dễ lệch ở mẫu số hoặc ở chỗ lọc
+`rating > 0`, mà lệch kiểu đó không làm hỏng gì — chỉ làm bảng xếp hạng sai một
+cách rất thuyết phục.
+
+### Ba cái bẫy đã gặp, ghi lại để khỏi gặp lại
+
+- **dbt đọc YAML bằng encoding của hệ điều hành.** Trên Windows là cp1252 nên nó
+  chết ngay ở dòng tiếng Việt đầu tiên trong `dbt_project.yml`. `make marts` đặt
+  sẵn `PYTHONUTF8=1`.
+- **Thư mục `target/` của dbt không được nằm trong `data/`.** Nó chứa cache parse
+  theo đường dẫn tuyệt đối; để trong bind mount thì container đọc nhầm cache của
+  host rồi chết với `KeyError: dbt_duckdb://macros/catalog.sql`.
+- **`market.des_key` không phải khoá ghép.** Khoá ghép với Fragrantica là
+  `market_key` (URL namperfume); `des_key` trỏ về trang sản phẩm trên site của
+  chính mình. Hai cột nhìn giống nhau, hoán đổi thì mất hẳn liên kết về site nhà
+  mà không có lỗi nào.
+
+### Có cần tới mức này không
+
+Thành thật: ở 629 chai thì **không** — DuckDB không giải quyết vấn đề tốc độ nào
+cả, mọi chỉ số đã có sẵn bản Python chạy trong một giây. Tầng này mua được hai
+thứ khác: hỏi được bằng **SQL** thay vì phải viết Python cho từng câu hỏi mới,
+và có **test trên chính phép biến đổi**. Nút thắt thật vẫn là tốc độ crawl
+(độ phủ 1,9%).
+
 ## Lên lịch nhỏ giọt (orchestration)
 
 Fragrantica chặn thiết bị truy cập quá dày, nên không thể cào một mạch. Cách
@@ -293,6 +384,8 @@ docker compose up -d          # bật bộ lên lịch, chạy 02:30 hằng ngà
 docker compose logs -f scheduler        # xem nó đang làm gì
 docker compose run --rm cli queue       # tiến độ
 docker compose run --rm cli daily --render --budget 20   # chạy tay một lượt
+docker compose run --rm cli silver      # bronze -> Parquet
+docker compose run --rm marts           # dbt build -> bảng gold
 docker compose run --rm test            # toàn bộ test, không cần mạng
 docker compose down
 ```
@@ -303,8 +396,8 @@ Muốn biết ngay là nó hoạt động, đừng chờ tới 02:30:
 RUN_ON_START=1 docker compose up   # chạy một lượt liền, để nguyên terminal mà xem
 ```
 
-Ba service: `scheduler` (chạy nền, `restart: unless-stopped`), `cli` (chạy tay
-một lệnh bất kỳ), `test`. Hai cái sau nằm trong profile `cli` nên
+Bốn service: `scheduler` (chạy nền, `restart: unless-stopped`), `cli` (chạy tay
+một lệnh bất kỳ), `marts` (dbt), `test`. Ba cái sau nằm trong profile `cli` nên
 `docker compose up` không đụng tới.
 
 Vài điểm đã cân nhắc, để sau này không phải dò lại:
@@ -375,6 +468,60 @@ Một chai full ứng với nhiều bản mini thì mỗi dòng CSV ra một b�
 Mặc định quét `data/raw/fragrantica/`; đổi bằng `--scan`. URL nguồn chưa có
 trong dữ liệu đã crawl sẽ được liệt kê ra để bạn crawl bổ sung.
 
+## Bố cục kho thô (bronze)
+
+Mỗi **loại** bản ghi một thư mục:
+
+```
+data/raw/fragrantica/
+  perfumes/   chi tiết chai          <- lệnh crawl, daily
+  brands/     danh mục hãng          <- lệnh brands
+  products/   mục lục chai của hãng  <- lệnh products
+```
+
+Vì sao phải tách, chứ không phải cho gọn: ba loại này có **khoá chính khác
+nhau** (`url`, `brand_url`, `perfume_url`). Khi để chung một chỗ, loader của
+phần phân tích khoá theo `url` nên hai loại kia rơi hết — đo trên kho thật:
+**24.676/25.465 dòng, tức 97%, bị bỏ mà không một dòng log nào**. Không mất file,
+nhưng mất tín hiệu: số chai mà một hãng *thật sự* có nằm đúng trong mấy dòng đó.
+
+Hai lớp bảo vệ, cố ý làm cả hai:
+
+1. **Tách thư mục** — đọc một loại thì không nhìn thấy loại khác.
+2. **`core/bronze.py` phân loại theo hình dạng bản ghi và ĐẾM phần bỏ qua** —
+   vì tách thư mục chỉ đúng khi mọi thứ đã nằm đúng chỗ. Lớp này vẫn chạy đúng
+   trên kho cũ chưa dọn, và quan trọng hơn: nó *báo ra* khi bỏ thứ gì.
+
+### Dọn kho cũ (tuỳ chọn)
+
+```powershell
+python scripts/migrate_bronze.py            # xem sẽ chuyển gì, KHÔNG đụng file
+python scripts/migrate_bronze.py --apply    # làm thật
+python scripts/migrate_bronze.py --undo     # trả về chỗ cũ
+```
+
+Chỉ **di chuyển** file, không sửa nội dung, và chỉ chuyển file mà mọi dòng cùng
+một loại — file lẫn nhiều loại bị bỏ qua kèm cảnh báo, vì chẻ nó ra là sửa dữ
+liệu chứ không còn là dọn chỗ. Không chạy cũng không sao: bố cục phẳng kiểu cũ
+vẫn đọc được.
+
+### Độ phủ — thứ mà việc tách entity mở ra
+
+`analyze` giờ ghi thêm `coverage.csv`: mỗi hãng có bao nhiêu chai trong mục lục,
+đã crawl chi tiết được bao nhiêu.
+
+```
+brand,                 catalog_perfumes, detailed, coverage_pct
+Lattafa Perfumes,      391,              12,       3.1
+Al Haramain Perfumes,  378,              3,        0.8
+Ajmal,                 369,              0,        0.0
+```
+
+Đây là con số giữ cho mọi kết luận khác khỏi bị đọc quá tay: “Lattafa 4,1 sao”
+thực ra là kết luận về **12/391 chai** của Lattafa. `catalog_perfumes` để trống
+(không phải 0) khi chưa crawl mục lục hãng đó — *chưa biết tổng* khác hẳn *biết
+tổng và mới phủ 0%*.
+
 ## Phân tích thị trường
 
 ```powershell
@@ -393,7 +540,9 @@ python -m perfume_intel analyze --out data/processed/thu-nghiem
 | `gender.csv` | Cơ cấu Nam / Nữ / Unisex |
 | `season.csv` | Mùa nào đang nhiều/ít hàng (theo vote when-to-wear) |
 | `market_gap.csv` | Chai nhiều vote nhưng chưa thấy bán ở namperfume |
+| `coverage.csv` | Mỗi hãng: có bao nhiêu chai, đã crawl chi tiết bao nhiêu |
 | `summary.json` | Số tổng quan của cả lần chạy |
+| **`report.html`** | **Sáu biểu đồ để người đọc — mở bằng double-click** |
 
 **Điểm có hiệu chỉnh (`rating_weighted`)**: điểm thô rất dễ đánh lừa — một chai
 4.9 sao với 30 vote không nói lên gì về thị trường, còn 4.1 sao với 9.000 vote
@@ -407,6 +556,47 @@ Chỗ chờ sẵn đã có (`Row.have_it/had_it/want_it`, `summary.json` báo
 `with_ownership`); muốn dùng thì bổ sung parser trong
 `perfume_intel/sources/fragrantica/parsers.py` rồi crawl lại — phần metrics
 không phải sửa gì.
+
+### Báo cáo HTML (`report.html`)
+
+Mở bằng double-click, **không cần mạng và không cần server**. Tắt bằng
+`analyze --no-html`.
+
+| Hình | Dạng | Trả lời câu |
+|---|---|---|
+| Accord nào cho hoàn cảnh nào | heatmap lưỡng hướng | accord nào nghiêng về mùa/giờ nào hơn mức chung |
+| Định vị hãng | scatter, bong bóng = số chai | hãng nào vừa đông người nói vừa được chấm cao |
+| Accord nào lưu hương lâu | cột xếp chồng lưỡng hướng | accord nào bám lâu, accord nào bay nhanh |
+| Note nào đi với note nào | heatmap có điều kiện | có note A thì bao nhiêu % cũng có note B |
+| Số chai theo năm ra mắt | cột xếp chồng theo giới tính | độ phủ dữ liệu theo thời gian |
+| Khoảng trống thị trường VN | cột ngang | chai được nói nhiều nhưng chưa bán ở VN |
+
+**Tự vẽ SVG, không dùng thư viện biểu đồ nào.** Ba lý do, theo thứ tự quan
+trọng: báo cáo phải mở được khi offline (link CDN thì nửa năm sau là trang
+trắng); không thêm phụ thuộc vào một project hiện chỉ cần requests + bs4 + lxml;
+và tất định nên test được từng hình.
+
+Mấy quyết định đáng biết, vì đều là chỗ từng làm hình nói sai và đã phải sửa sau
+khi nhìn bản dựng thật:
+
+- **Heatmap accord × hoàn cảnh so theo TỪNG CỘT, không theo giá trị thô.**
+  “Mùa” và “ngày/đêm” là hai khối vote riêng trên Fragrantica, mỗi khối tự quy
+  về 100% của chính nó. Tô theo số thô thì cột “Ngày” đậm đều từ trên xuống —
+  trông như một phát hiện, thực ra chỉ là mẫu số khác.
+- **Thang lưỡng hướng có mức sàn.** Thước theo độ lệch chuẩn luôn tiêu hết dải
+  màu, nên một cột mà mọi giá trị chỉ chênh 1–2 điểm vẫn bị tô từ đỏ đậm sang
+  xanh đậm. Sàn 3 điểm chặn việc khuếch đại nhiễu (sigma thật mỗi cột là
+  5,9–10,4 điểm nên không làm phẳng tín hiệu thật).
+- **Trục log dùng mốc 1–2–5 × 10ⁿ.** Dải vote thật là 24k–250k, chưa tới hai
+  bậc, nên nếu chỉ lấy luỹ thừa 10 thì trục còn đúng một mốc.
+- **Nền tối đảo thang một sắc.** Bậc ứng với “gần 0” phải lùi về phía mặt nền —
+  nền sáng thì bậc nhạt lùi, nền tối thì bậc đậm mới lùi.
+- **Hình nào cũng có bảng số gập lại được.** Thang màu không bao giờ là cách
+  duy nhất đọc một giá trị.
+- **Thiếu dữ liệu thì để TRỐNG kèm lý do, không vẽ bừa.** Hiện chưa ghép được
+  chai nào với namperfume nên hình “khoảng trống thị trường” cố tình bỏ trống:
+  không có phía đối chiếu thì xếp hạng chai nhiều vote rồi gọi đó là “khoảng
+  trống” là một câu khác hẳn.
 
 ### Thêm chỉ số mới
 
@@ -423,6 +613,92 @@ METRICS = {..., "perfumer": by_perfumer}
 
 Cần thêm dữ liệu đầu vào thì thêm trường vào `Row` và `_to_row()` trong
 `analytics/dataset.py`.
+
+## Tìm chai/hãng giống nhau (`similar`)
+
+Vector hoá dữ liệu cộng đồng để trả lời ba câu: chai nào giống chai này, hãng nào
+giống hãng này, và chai nào khớp nhất với một bộ note / hoàn cảnh.
+
+```powershell
+# 1. Chai nào giống chai này (kèm lý do)
+python -m perfume_intel similar "Angham" --explain
+
+# 2. Chai giống nhưng của hãng khác (bỏ các bản flanker cùng dòng)
+python -m perfume_intel similar "Angham" --other-brands --min-votes 500
+
+# 3. Hãng nào giống hãng này
+python -m perfume_intel similar --brand "Lattafa Perfumes" --explain
+
+# 4. Theo note hương — không cần gõ đúng tên trên Fragrantica
+python -m perfume_intel similar --notes "oud,vanilla" --min-votes 1000
+
+# 5. Theo hoàn cảnh sử dụng
+python -m perfume_intel similar --occasion "winter,night" --min-votes 500
+
+# JSON để nối vào chỗ khác
+python -m perfume_intel similar "Angham" --json
+```
+
+Ví dụ thật trên dữ liệu đã crawl:
+
+```
+$ python -m perfume_intel similar --occasion "winter,night" --min-votes 500
+   0.317  Hypnotic Poison - Dior           4.08* 30.340 vote  Nu
+   0.316  Dior Homme Intense 2007 - Dior   4.48*  3.525 vote  Nam
+   0.315  Ombre Nomade - Louis Vuitton     4.25*  7.117 vote  Unisex
+   0.312  La Nuit Tresor - Lancome         4.08* 12.771 vote  Nu
+```
+
+### Vector được dựng thế nào
+
+Năm khối, mỗi chiều là một thứ có tên nên in ra là đọc được:
+
+| Khối | Chiều | Nguồn |
+|---|---|---|
+| `acc` mùi | 64 | accord + `width` (độ mạnh trên trang) |
+| `note` | ~550 | note theo tầng, nhân IDF |
+| `occ` hoàn cảnh | 6 | % vote 4 mùa + ngày/đêm |
+| `str` cường độ | 2 | độ lưu hương, độ toả hương |
+| `fam` họ hương | 31 | `fragrance_family` |
+
+Không dùng model nào: tất định, test được, chạy offline, và **giải thích được** —
+`--explain` chỉ ra đúng những chiều tạo nên điểm giống nhau.
+
+Vài quyết định đáng biết, vì chúng đều là chỗ dễ làm sai mà không có lỗi nào báo:
+
+- **Chuẩn hoá L2 từng khối TRƯỚC, rồi mới nhân trọng số khối.** Ghép thẳng rồi
+  chuẩn hoá một lần thì 550 chiều note nhấn chìm 6 chiều hoàn cảnh: hai chai
+  trái ngược hẳn về mùa vẫn ra 0,98 giống nhau. Đo trên fixture test: cách đúng
+  cho 0,857, cách sai cho 0,982.
+- **Note base nặng hơn middle, middle nặng hơn top** (1,0 / 0,7 / 0,5). Base là
+  thứ còn lại sau vài giờ, top bay trong mươi phút.
+- **IDF cho cả note và accord.** Trùng "Musk" (chai nào cũng có) nói ít hơn nhiều
+  so với trùng "Oud".
+- **Note chỉ xuất hiện 1 lần thì bỏ** (`MIN_DF = 2`). Trên kho hiện tại có
+  194/551 note như vậy; giữ lại thì IDF đẩy chúng lên cao nhất và hai chai tình
+  cờ trùng một note độc nhất trông như rất giống nhau.
+- **Khớp một phần khi gõ tên note.** Gõ `oud` sẽ tự về `agarwood (oud)` — tên
+  trên Fragrantica không phải tên người ta hay gọi. Term không khớp được thì
+  **báo ra**, không im lặng bỏ.
+- **Chân dung hãng CHỈ dùng khối mùi.** Trọng tâm của 120 chai làm loãng hết chi
+  tiết note, còn khối hoàn cảnh thì sống sót qua phép trung bình và hội tụ về một
+  giá trị chung — giữ nó thì mọi hãng đều "giống nhau" ở fall/winter/night và
+  điểm số nén vào dải 0,76-0,82. Đã đo thật rồi sửa.
+- **Giới tính và rating KHÔNG phải chiều của vector.** Giới tính là bộ lọc
+  (`--gender`); còn hai chai không giống nhau chỉ vì cùng được 4,2 sao.
+
+### Ba điều cần biết trước khi tin kết quả
+
+1. **"Hoàn cảnh" chỉ có mùa và ngày/đêm.** Fragrantica không vote "công sở",
+   "hẹn hò", "gym". Mấy nhãn đó là **suy diễn** từ độ toả/độ lưu
+   (`features.derive_occasion`) và được in kèm chữ "suy diễn" — đừng coi là dữ
+   liệu cộng đồng.
+2. **Chỉ so được trong phần đã crawl:** 629/~100k chai. Kết quả đúng trong phạm
+   vi đó, không phải trên toàn bộ Fragrantica.
+3. **Không có `--min-votes`, đầu bảng hay là chai vô danh.** Cosine thưởng cho
+   chai mà note bạn hỏi chiếm tỉ trọng lớn, và đó thường là chai ít ai biết
+   (1-5 vote). Mặc định KHÔNG lọc — để không âm thầm giấu dữ liệu — nên muốn kết
+   quả phổ thông thì tự thêm `--min-votes 500`.
 
 ## Demo nhanh
 
@@ -566,12 +842,14 @@ perfume_intel/
     queue_cmd.py       lệnh queue (nạp hàng đợi, xem tiến độ)
     daily_cmd.py       lệnh daily (chạy theo lịch)
     analyze_cmd.py     lệnh analyze
+    similar_cmd.py     lệnh similar (chai/hãng giống nhau)
   core/                hạ tầng, KHÔNG biết gì về site cụ thể
     http.py            session + throttle + retry/backoff + cache đĩa + robots
     browser.py         bản Fetcher chạy bằng Playwright (cho --render)
     csv_input.py       đọc link từ CSV/text của người dùng (đoán dấu phân cách...)
     storage.py         đọc & ghi JSONL / CSV
     text.py            chuẩn hoá giới tính, tên file kết quả, khoá so khớp URL
+    bronze.py          phân loại bản ghi + quét kho thô theo từng loại
   sources/             mỗi site một package
     base.py            SiteScraper: vòng lặp crawl dùng chung
     fragrantica/       models.py · parsers.py · scraper.py
@@ -587,7 +865,17 @@ perfume_intel/
     dataset.py         .jsonl đã crawl -> list[Row] phẳng
     metrics.py         Row -> các bảng chỉ số (hàm thuần, test được)
     report.py          chạy chỉ số rồi ghi ra data/processed/
+    svg.py             viên gạch SVG (thang đo, màu, thoát XML) — không thư viện
+    charts.py          Row -> 6 Figure (hình + bảng số + chú giải + cảnh báo)
+    html_report.py     ghép Figure thành report.html tự chứa
+  warehouse/           kho phân tích (cần extra [warehouse])
+    silver.py          bronze -> Parquet khử trùng, có kiểu, trải phẳng
+  vectors/             vector hoá để đo độ giống nhau, chạy offline
+    features.py        Row -> vector thưa (5 khối, có IDF, giải thích được)
+    index.py           tra cứu chai/hãng giống nhau + chân dung hãng
+transform/             dự án dbt: staging + 5 mart + test (extra [marts])
 scripts/demo.py        xem nhanh tháp hương của vài chai
+scripts/migrate_bronze.py  dọn kho thô về bố cục mỗi loại một thư mục
 tests/                 test offline trên HTML thật đã lưu
 ```
 

@@ -17,6 +17,13 @@ dependencies = [
 # Chỉ cần cho `--render` (lấy when-to-wear, độ lưu hương, độ toả hương).
 # Sau khi cài chạy thêm: python -m playwright install chromium
 render = ["playwright>=1.40"]
+# Tầng silver (Parquet) + hỏi bằng SQL. duckdb là một wheel ~22 MB và KHÔNG kéo
+# theo gói nào khác — không cần pandas/pyarrow.
+warehouse = ["duckdb>=1.0"]
+# Tầng gold/marts bằng dbt. Nặng hơn hẳn: ~35 gói. Chỉ cài khi thật sự muốn
+# dựng marts bằng SQL có kiểm thử; tầng silver ở trên đã trả lời được phần lớn
+# câu hỏi mà không cần tới nó.
+marts = ["dbt-duckdb>=1.9", "duckdb>=1.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

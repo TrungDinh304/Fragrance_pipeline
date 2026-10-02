@@ -29,6 +29,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--metric", action="append", choices=sorted(METRICS),
                    help="Chỉ tính một số chỉ số; lặp lại cờ để chọn nhiều "
                         f"(mặc định: tất cả — {', '.join(sorted(METRICS))})")
+    p.add_argument("--no-html", dest="html", action="store_false",
+                   help="Không sinh report.html (mặc định là có)")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=run)
 
@@ -50,7 +52,8 @@ def run(args: argparse.Namespace) -> int:
         log.error("Không đọc được bản ghi nào trong %s", community)
         return 1
 
-    out_dir = report.run(rows, args.out, only=args.metric)
+    out_dir = report.run(rows, args.out, only=args.metric,
+                         html=args.html, community=community)
     log.info("Tổng quan: %s",
              json.dumps(report.overview(rows), ensure_ascii=False))
     log.info("Kết quả -> %s/", out_dir)

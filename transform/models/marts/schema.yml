@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: mart_brand
+    description: Quy mô và mức độ được chú ý của từng hãng.
+    columns:
+      - name: brand
+        tests: [unique, not_null]
+      - name: perfumes
+        tests: [not_null]
+
+  - name: mart_coverage
+    description: Mục lục có bao nhiêu chai, đã crawl chi tiết bao nhiêu.
+    columns:
+      - name: brand
+        tests: [unique, not_null]
+      - name: detailed
+        tests: [not_null]
+
+  - name: mart_accord
+    columns:
+      - name: accord
+        tests: [unique, not_null]
+      - name: perfumes
+        tests: [not_null]
+
+  - name: mart_accord_occasion
+    columns:
+      - name: accord
+        tests: [not_null]
+      - name: axis
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [winter, spring, summer, fall, day, night]
+
+  - name: mart_note_pairs
+    columns:
+      - name: note_a
+        tests: [not_null]
+      - name: pct_b_given_a
+        tests: [not_null]

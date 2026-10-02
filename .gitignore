@@ -15,3 +15,8 @@ data/
 
 # .env cua Docker Compose: cau hinh rieng tung may.
 .env
+
+# Rac build cua dbt: cache parse theo duong dan tuyet doi, khong chia se duoc.
+transform/target/
+transform/logs/
+transform/dbt_packages/

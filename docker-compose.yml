@@ -53,6 +53,24 @@ services:
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
 
+  # --- dựng bảng gold bằng dbt ------------------------------------------------
+  #   docker compose run --rm marts            (mặc định: build = chạy + test)
+  #   docker compose run --rm marts run        (chỉ dựng, bỏ test)
+  #   docker compose run --rm marts test
+  # Cần `silver` chạy trước, vì dbt đọc Parquet chứ không đọc JSONL thô.
+  marts:
+    <<: *app
+    profiles: ["cli"]
+    working_dir: /app/transform
+    entrypoint: ["python", "-m", "dbt.cli.main"]
+    command: ["build"]
+    environment:
+      # dbt đọc YAML bằng encoding mặc định của hệ điều hành; thiếu dòng này thì
+      # nó chết ngay ở dòng tiếng Việt đầu tiên trong dbt_project.yml.
+      PYTHONUTF8: "1"
+      DBT_PROFILES_DIR: "."
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+
   # --- toàn bộ test, không cần mạng -------------------------------------------
   #   docker compose run --rm test
   test:

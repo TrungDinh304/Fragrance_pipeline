@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core.bronze import BRAND_PERFUME
 from ..core import storage
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..core.text import output_stem
@@ -70,7 +71,7 @@ def run(args: argparse.Namespace) -> int:
     if brands is None:
         return 1
 
-    out_base = args.out or (config.raw_dir(SITE)
+    out_base = args.out or (config.raw_dir(SITE, BRAND_PERFUME)
                             / output_stem("brand_products", SITE))
     jsonl_path = out_base.with_suffix(".jsonl")
     write_jsonl = args.format in ("jsonl", "both")
