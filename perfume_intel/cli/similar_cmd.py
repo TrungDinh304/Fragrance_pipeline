@@ -8,8 +8,11 @@ Bốn cách hỏi:
     similar --occasion winter,night        chai nào hợp hoàn cảnh này
 
 Tên lệnh là `similar` chứ không phải `recommend` cho đúng việc nó làm: đây là độ
-giống nhau tính từ dữ liệu cộng đồng, không phải gợi ý cá nhân hoá — không có dữ
-liệu người dùng nào để cá nhân hoá.
+giống nhau tính từ dữ liệu cộng đồng, không phải gợi ý cá nhân hoá.
+
+File này CHỈ nói chuyện qua `retrieval.ports` — không biết gì về vector thưa,
+IDF hay cách lưu trữ. Đổi backend (DuckDB, pgvector) không phải sửa dòng nào ở
+đây; `tests/test_retrieval.py` có một test canh đúng điều đó.
 """
 
 from __future__ import annotations
@@ -20,14 +23,10 @@ import logging
 from pathlib import Path
 
 from .. import config
-from ..analytics import dataset
-from ..analytics.dataset import DAY_NIGHT, SEASONS
-from ..vectors import features
-from ..vectors.index import VectorIndex
+from ..retrieval import (InMemoryRetriever, Query, Retriever, UnknownBrand,
+                         UnknownPerfume, ports)
 
 log = logging.getLogger(__name__)
-
-OCCASION_AXES = (*SEASONS, *DAY_NIGHT)
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -42,7 +41,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--accords", metavar="a,b,c",
                    help="Tìm theo accord (woody, sweet, citrus...)")
     p.add_argument("--occasion", metavar="a,b",
-                   help=f"Tìm theo hoàn cảnh: {', '.join(OCCASION_AXES)}")
+                   help=f"Tìm theo hoàn cảnh: {', '.join(ports.OCCASIONS)}")
 
     p.add_argument("--limit", type=int, default=10, help="Số kết quả (mặc định 10)")
     p.add_argument("--gender", choices=["Nam", "Nữ", "Unisex"],
@@ -69,75 +68,88 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=run)
 
 
-def _split(value: str | None) -> list[str]:
+def _split(value: str | None) -> tuple[str, ...]:
     if not value:
-        return []
-    return [part.strip() for part in value.split(",") if part.strip()]
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
-# Nhãn khối cho phần giải thích. Phải giữ khối lại, không cắt bỏ: nhiều tên
-# tồn tại ở CẢ hai khối ("cacao" vừa là accord vừa là note), nên bỏ tiền tố đi
-# thì dòng giải thích trông như bị lặp mà không nói được vì sao.
-_BLOCK_LABEL = {"acc": "mùi", "note": "note", "occ": "dịp",
-                "str": "độ", "fam": "họ"}
+# Nhãn khối cho phần giải thích. Giữ khối lại chứ không cắt bỏ: nhiều tên tồn
+# tại ở CẢ hai khối ("cacao" vừa là accord vừa là note), bỏ đi thì dòng giải
+# thích trông như bị lặp mà không nói được vì sao.
+_BLOCK_LABEL = {ports.ACCORD: "mùi", ports.NOTE: "note",
+                ports.OCCASION: "dịp", ports.STRENGTH: "độ",
+                ports.FAMILY: "họ"}
 
 
-def _why(hit) -> str:
-    parts = []
-    for dim, weight in hit.why:
-        block, _, name = dim.partition(":")
-        parts.append(f"{_BLOCK_LABEL.get(block, block)}:{name} {weight:.3f}")
-    return ", ".join(parts)
+def _why(match) -> str:
+    return ", ".join(
+        f"{_BLOCK_LABEL.get(w.block, w.block)}:{w.label} {w.weight:.3f}"
+        for w in match.why)
 
 
-def _label(row) -> str:
-    bits = [row.name or "(không tên)"]
-    if row.brand:
-        bits.append(f"— {row.brand}")
+def _label(match) -> str:
+    bits = [match.name or "(không tên)"]
+    if match.brand:
+        bits.append(f"— {match.brand}")
     return " ".join(bits)
 
 
-def _print_hits(hits, explain: bool) -> None:
-    width = max((len(_label(h.row)) for h in hits), default=10)
+def _print_matches(matches, explain: bool) -> None:
+    width = max((len(_label(m)) for m in matches), default=10)
     width = min(max(width, 20), 52)
-    for hit in hits:
-        row = hit.row
+    for m in matches:
         extra = []
-        if row.rating is not None:
-            extra.append(f"{row.rating:.2f}★")
-        if row.rating_count:
-            extra.append(f"{row.rating_count:,} vote".replace(",", "."))
-        if row.gender:
-            extra.append(row.gender)
-        print(f"  {hit.score:6.3f}  {_label(row)[:width]:<{width}}  "
+        if m.rating is not None:
+            extra.append(f"{m.rating:.2f}★")
+        if m.rating_count:
+            extra.append(f"{m.rating_count:,} vote".replace(",", "."))
+        if m.gender:
+            extra.append(m.gender)
+        print(f"  {m.score:6.3f}  {_label(m)[:width]:<{width}}  "
               f"{'  '.join(extra)}")
-        if explain and hit.why:
-            print(f"  {'':6}  └─ {_why(hit)}")
+        if explain and m.why:
+            print(f"  {'':6}  └─ {_why(m)}")
 
 
-def _print_brands(target, hits, explain: bool) -> None:
-    print(f"Hãng giống {target.brand} "
-          f"({target.perfumes} chai đã crawl):")
+def _print_brands(result, explain: bool) -> None:
+    print(f"Hãng giống {result.target.brand} "
+          f"({result.target.perfumes} chai đã crawl):")
     print()
-    width = min(max((len(h.row.name or "") for h in hits), default=20), 46)
-    for hit in hits:
-        print(f"  {hit.score:6.3f}  {(hit.row.name or '')[:width]:<{width}}  "
-              f"{hit.row.rating_count} chai")
-        if explain and hit.why:
-            print(f"  {'':6}  └─ {_why(hit)}")
+    width = min(max((len(m.brand) for m in result.matches), default=20), 46)
+    for m in result.matches:
+        print(f"  {m.score:6.3f}  {m.brand[:width]:<{width}}  {m.perfumes} chai")
+        if explain and m.why:
+            print(f"  {'':6}  └─ {_why(m)}")
 
 
-def _as_json(hits) -> str:
+def _as_json(matches) -> str:
     return json.dumps([{
-        "score": round(h.score, 4),
-        "name": h.row.name,
-        "brand": h.row.brand,
-        "url": h.row.url or None,
-        "rating": h.row.rating,
-        "rating_count": h.row.rating_count,
-        "gender": h.row.gender,
-        "why": [{"dim": k, "weight": round(v, 4)} for k, v in h.why],
-    } for h in hits], ensure_ascii=False, indent=2)
+        "perfume_key": m.perfume_key,
+        "score": round(m.score, 4),
+        "name": m.name, "brand": m.brand, "url": m.url,
+        "rating": m.rating, "rating_count": m.rating_count,
+        "gender": m.gender,
+        "why": [{"block": w.block, "label": w.label, "weight": w.weight}
+                for w in m.why],
+    } for m in matches], ensure_ascii=False, indent=2)
+
+
+def _brands_json(result) -> str:
+    return json.dumps([{
+        "brand": m.brand, "perfumes": m.perfumes, "score": round(m.score, 4),
+        "why": [{"block": w.block, "label": w.label, "weight": w.weight}
+                for w in m.why],
+    } for m in result.matches], ensure_ascii=False, indent=2)
+
+
+def _report(result) -> None:
+    """Nói ra những gì đã xảy ra với câu hỏi, trước khi in kết quả."""
+    for typed, actual in result.resolved.items():
+        log.info("%r -> %r", typed, actual)
+    if result.unknown:
+        log.warning("Bỏ qua term không có trong dữ liệu đã crawl: %s",
+                    ", ".join(result.unknown))
 
 
 def _mode_count(args) -> int:
@@ -160,107 +172,79 @@ def run(args: argparse.Namespace) -> int:
         log.error("Chưa có dữ liệu: %s", community)
         return 1
 
-    rows = dataset.build(community)
-    if not rows:
-        log.error("Không đọc được bản ghi nào trong %s", community)
-        return 1
-
-    index = VectorIndex(rows)
-    if not index.rows:
+    retriever: Retriever = InMemoryRetriever.from_bronze(community)
+    if not len(retriever):
         log.error("Không có chai nào đủ dữ liệu (cần accord hoặc note). "
                   "Crawl bằng --render để lấy đủ.")
         return 1
 
-    # --- hãng giống hãng ---
     if args.brand:
-        target, hits = index.similar_brands(
+        return _run_brands(retriever, args)
+
+    return _run_perfumes(retriever, args)
+
+
+def _run_brands(retriever: Retriever, args: argparse.Namespace) -> int:
+    try:
+        result = retriever.similar_brands(
             args.brand, limit=args.limit,
             min_perfumes=args.min_perfumes, explain=args.explain)
-        if target is None:
-            log.error("Không có hãng nào khớp %r trong dữ liệu đã crawl.",
-                      args.brand)
-            return 1
-        if not hits:
-            log.error("Không có hãng nào khác đạt --min-perfumes %d. "
-                      "Hạ ngưỡng xuống, hoặc crawl thêm.", args.min_perfumes)
-            return 1
-        if args.as_json:
-            print(_as_json(hits))
-        else:
-            _print_brands(target, hits, args.explain)
-        return 0
-
-    # --- chai giống chai ---
-    if args.query:
-        i = index.find(args.query)
-        if i is None:
-            log.error("Không tìm thấy chai nào khớp %r trong dữ liệu đã crawl.",
-                      args.query)
-            return 1
-        found = index.rows[i]
-        others = index.matches(args.query)
-        if len(others) > 1:
-            log.info("%r khớp %d chai; dùng chai nhiều vote nhất: %s.",
-                     args.query, len(others), _label(found))
-
-        hits = index.similar(i, limit=args.limit,
-                             same_brand=not args.other_brands,
-                             gender=args.gender, min_votes=args.min_votes,
-                             explain=args.explain)
-        if not args.as_json:
-            print(f"Giống {_label(found)}:")
-            occasion = features.derive_occasion(found)
-            if occasion:
-                print(f"  (hoàn cảnh suy diễn: {', '.join(occasion)})")
-            print()
-        if not hits:
-            log.error("Không có kết quả nào sau khi lọc. Nới --min-votes "
-                      "hoặc bỏ --gender.")
-            return 1
-        print(_as_json(hits)) if args.as_json else _print_hits(hits, args.explain)
-        return 0
-
-    # --- theo note / accord / hoàn cảnh ---
-    notes, accords = _split(args.notes), _split(args.accords)
-    occasion = [a.lower() for a in _split(args.occasion)]
-
-    bad_axes = [a for a in occasion if a not in OCCASION_AXES]
-    if bad_axes:
-        log.error("Hoàn cảnh không có: %s. Chỉ có: %s",
-                  ", ".join(bad_axes), ", ".join(OCCASION_AXES))
+    except UnknownBrand:
+        log.error("Không có hãng nào khớp %r trong dữ liệu đã crawl.",
+                  args.brand)
         return 1
-
-    terms: list[str] = []
-    missing: list[str] = []
-    renamed: dict[str, str] = {}
-    for block, names in ((features.NOTE, notes), (features.ACCORD, accords)):
-        found, absent, mapped = index.resolve(block, names)
-        terms += found
-        missing += absent
-        renamed.update(mapped)
-
-    for typed, actual in renamed.items():
-        log.info("%r -> %r", typed, actual)
-    if missing:
-        log.warning("Bỏ qua term không có trong dữ liệu đã crawl: %s",
-                    ", ".join(missing))
-
-    vec = features.query_from_terms(terms, occasion=occasion, idf=index.idf)
-    if not vec:
-        log.error("Không còn term nào dùng được để tìm. "
-                  "Xem note/accord đang có bằng `analyze`.")
-        return 1
-
-    hits = index.query(vec, limit=args.limit, gender=args.gender,
-                       min_votes=args.min_votes, explain=args.explain)
-    if not hits:
-        log.error("Không có kết quả nào sau khi lọc.")
+    if not result.matches:
+        log.error("Không có hãng nào khác đạt --min-perfumes %d. "
+                  "Hạ ngưỡng xuống, hoặc crawl thêm.", args.min_perfumes)
         return 1
     if args.as_json:
-        print(_as_json(hits))
+        print(_brands_json(result))
     else:
-        asked = notes + accords + occasion
-        print(f"Khớp nhất với: {', '.join(asked)}")
+        _print_brands(result, args.explain)
+    return 0
+
+
+def _run_perfumes(retriever: Retriever, args: argparse.Namespace) -> int:
+    query = Query(
+        like_perfume=args.query,
+        notes=_split(args.notes),
+        accords=_split(args.accords),
+        occasions=_split(args.occasion),
+        gender=args.gender,
+        min_votes=args.min_votes,
+        include_same_brand=not args.other_brands,
+        limit=args.limit,
+        explain=args.explain,
+    )
+
+    try:
+        result = retriever.search(query)
+    except UnknownPerfume:
+        log.error("Không tìm thấy chai nào khớp %r trong dữ liệu đã crawl.",
+                  args.query)
+        return 1
+
+    _report(result)
+
+    if not args.as_json:
+        if result.seed is not None:
+            if result.ambiguous:
+                log.info("%r khớp %d chai; dùng chai nhiều vote nhất: %s.",
+                         args.query, len(result.ambiguous),
+                         _label(result.seed))
+            print(f"Giống {_label(result.seed)}:")
+        else:
+            asked = [*query.notes, *query.accords, *query.occasions]
+            print(f"Khớp nhất với: {', '.join(asked)}")
         print()
-        _print_hits(hits, args.explain)
+
+    if not result.matches:
+        log.error("Không có kết quả nào sau khi lọc. Nới --min-votes, "
+                  "bỏ --gender, hoặc kiểm lại tên note.")
+        return 1
+
+    if args.as_json:
+        print(_as_json(result.matches))
+    else:
+        _print_matches(result.matches, args.explain)
     return 0

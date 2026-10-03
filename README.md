@@ -842,6 +842,9 @@ Cần CSV thì thêm `--format csv` (hoặc `--format both`). Bản CSV là bả
 
 ## Cấu trúc
 
+> Ranh giới giữa các lớp và lý do chọn công nghệ: xem
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ```
 perfume_intel/
   config.py            URL gốc, bố cục thư mục data, delay, retry, headers
@@ -886,6 +889,9 @@ perfume_intel/
   vectors/             vector hoá để đo độ giống nhau, chạy offline
     features.py        Row -> vector thưa (5 khối, có IDF, giải thích được)
     index.py           tra cứu chai/hãng giống nhau + chân dung hãng
+  retrieval/           CỔNG truy xuất — phía trên chỉ được nhìn thấy lớp này
+    ports.py           Query/Match/Reason/Retriever (không nói gì về cài đặt)
+    memory.py          adapter #1: in-memory, bọc vectors/
 transform/             dự án dbt: staging + 5 mart + test (extra [marts])
 scripts/demo.py        xem nhanh tháp hương của vài chai
 scripts/migrate_bronze.py  dọn kho thô về bố cục mỗi loại một thư mục
