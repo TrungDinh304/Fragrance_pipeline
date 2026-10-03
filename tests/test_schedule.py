@@ -528,5 +528,110 @@ def test_daily_khong_crawl_chai_duoi_nguong():
         assert p["pending_below"] == 4, "chai dưới ngưỡng bị đụng tới"
 
 
+# ------------------------------------- site nghỉ chung (mọi lệnh cùng thấy)
+def test_ghi_nhan_site_nghi_va_doc_lai_duoc():
+    with _Store() as s:
+        assert s.state.site_cooldown("fragrantica") is None
+        s.state.block_site("fragrantica", 2, "HTTP 429", "products")
+        c = s.state.site_cooldown("fragrantica")
+        assert c["reason"] == "HTTP 429"
+        assert c["source"] == "products", "mất dấu lệnh nào gây ra"
+
+
+def test_het_han_thi_khong_con_nghi():
+    with _Store() as s:
+        s.state.block_site("fragrantica", -1, "đã hết từ lâu", "test")
+        assert s.state.site_cooldown("fragrantica") is None
+
+
+def test_lan_chan_nang_hon_thang():
+    """Rút ngắn thời gian nghỉ là thứ duy nhất ở đây có thể gây hại thật: một
+    lệnh ghi 12 giờ, lệnh sau ghi 1 giờ, mà lại nghe lệnh sau thì coi như không
+    có cơ chế nghỉ."""
+    with _Store() as s:
+        dai = s.state.block_site("fragrantica", 12, "nặng", "daily")
+        ngan = s.state.block_site("fragrantica", 1, "nhẹ", "products")
+        assert ngan == dai, "lần chặn ngắn hơn đã ghi đè lần dài hơn"
+        assert s.state.site_cooldown("fragrantica")["reason"] == "nặng"
+        # còn dài hơn nữa thì phải nhận
+        hon = s.state.block_site("fragrantica", 24, "nặng hơn", "daily")
+        assert hon > dai
+
+
+def test_daily_bo_luot_khi_site_dang_nghi():
+    """Đây là cả lý do của tính năng: một mẻ `products` dính 429 thì lượt
+    `daily` ngay sau đó phải TRÁNH RA, chứ không lao vào tiếp.
+    """
+    with _Store() as s:
+        _seeded(s, 10)
+        s.state.block_site(daily.SITE, 6, "HTTP 429", "products")
+
+        scraper = FakeScraper()
+        report = daily.run_once(s.state, scraper, budget=10, max_brands=1,
+                                min_comments=0, out_dir=s.dir / "out")
+
+        assert report.stopped_reason == "site đang nghỉ"
+        assert not report.ok, "bỏ lượt vì bị chặn mà vẫn báo ok"
+        assert scraper.fake.calls == [],             f"ĐÃ RA MẠNG dù site đang nghỉ: {scraper.fake.calls}"
+        assert s.state.progress()["perfumes_done"] == 0
+
+
+def test_bo_luot_van_duoc_ghi_vao_lich_su():
+    """Lượt bị bỏ phải để lại dấu, nếu không thì nhìn sổ tưởng lịch chết."""
+    with _Store() as s:
+        _seeded(s, 5)
+        s.state.block_site(daily.SITE, 6, "HTTP 429", "products")
+        daily.run_once(s.state, FakeScraper(), budget=5, max_brands=1,
+                       min_comments=0, out_dir=s.dir / "out")
+        runs = s.state.recent_runs(1)
+        assert runs and runs[0]["stopped_reason"] == "site đang nghỉ"
+        assert runs[0]["finished_at"], "lượt bỏ mà không đóng sổ"
+
+
+def test_het_nghi_thi_chay_lai_binh_thuong():
+    with _Store() as s:
+        _seeded(s, 5)
+        s.state.block_site(daily.SITE, -1, "đã hết", "products")
+        report = daily.run_once(s.state, FakeScraper(), budget=3, max_brands=1,
+                                min_comments=0, out_dir=s.dir / "out")
+        assert report.ok
+        assert s.state.progress()["perfumes_done"] == 3
+
+
+def test_daily_bi_chan_thi_ghi_cho_lenh_khac_biet():
+    """Chiều ngược lại: `daily` dính 429 cũng phải để lại ghi chú, để mẻ
+    `products` chạy sau đó thấy."""
+    with _Store() as s:
+        _seeded(s, 5)
+        scraper = FakeScraper(raise_after=0)
+        daily.run_once(s.state, scraper, budget=5, max_brands=1,
+                       min_comments=0, out_dir=s.dir / "out")
+        assert s.state.site_cooldown(daily.SITE),             "daily bị chặn nhưng không ghi gì vào sổ chung"
+
+
+def test_xoa_duoc_ghi_chu_nghi():
+    with _Store() as s:
+        s.state.block_site("fragrantica", 6, "HTTP 429", "products")
+        assert s.state.clear_site_cooldown() == 1
+        assert s.state.site_cooldown("fragrantica") is None
+
+
+def test_record_block_khong_lam_chet_lenh_dang_chay():
+    """Ghi sổ hỏng thì chỉ cảnh báo — mất một ghi chú còn hơn mất cả mẻ dữ liệu
+    vừa crawl.
+
+    Đường dẫn "không tồn tại" KHÔNG đủ để test cái này: `open_state` tự tạo
+    thư mục nên nó sẽ thành công. Phải ép một lỗi thật — ở đây là đòi mở sổ
+    bên trong một FILE, nên hệ điều hành trả NotADirectoryError.
+    """
+    from perfume_intel.pipelines import state as state_mod
+    with tempfile.TemporaryDirectory() as td:
+        chan = Path(td) / "toi-la-file"
+        chan.write_text("x", encoding="utf-8")
+        got = state_mod.record_block("fragrantica", RateLimited("429"), "test",
+                                     db=chan / "s.db")
+    assert got is None, "ghi sổ hỏng mà vẫn báo thành công"
+
+
 if __name__ == "__main__":
     raise SystemExit(run(globals()))

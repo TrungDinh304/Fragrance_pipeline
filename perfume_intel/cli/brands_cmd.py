@@ -9,6 +9,7 @@ from pathlib import Path
 from .. import config
 from ..core.bronze import BRAND
 from ..core import storage
+from ..pipelines.state import record_block
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..core.text import output_stem
 from ..pipelines import brands
@@ -48,6 +49,8 @@ def run(args: argparse.Namespace) -> int:
                               only_az=args.only_az)
     except (RateLimited, Blocked) as exc:
         log.error("%s", exc)
+        # Ghi vào sổ để MỌI lệnh khác (nhất là lịch `daily`) biết mà tránh ra.
+        record_block(SITE, exc, "brands")
         return 2
     except KeyboardInterrupt:
         log.warning("Đã dừng theo yêu cầu người dùng.")

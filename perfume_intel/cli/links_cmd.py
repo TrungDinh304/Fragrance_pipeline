@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 
+from ..pipelines.state import record_block
 from ..core.http import Blocked, RateLimited
 from ..sources.fragrantica.scraper import FragranticaScraper
 from .options import build_fetcher, fetch_args
@@ -30,6 +31,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
     except (RateLimited, Blocked) as exc:
         print(exc)
+        record_block(scraper.site, exc, "links")
         return 2
     finally:
         scraper.close()

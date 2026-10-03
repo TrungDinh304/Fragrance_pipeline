@@ -246,9 +246,34 @@ def test_silver_khong_rong_thi_khop_so_voi_loader_python():
 
 
 # ---------------------------------------------------- đối chiếu marts <-> Python
+def _marts_stale() -> str | None:
+    """Marts có cũ hơn dữ liệu bronze không?
+
+    Bộ marts được dựng một lần rồi nằm đó; mỗi lượt crawl lại làm nó lệch thêm.
+    Nếu để test đỏ vì chuyện đó thì `make test` sẽ đỏ mỗi lần crawl xong — đỏ vì
+    DỮ LIỆU đi tiếp, không phải vì CODE sai, và loại đỏ đó dạy người ta bỏ qua
+    màu đỏ. Nên: marts cũ hơn bronze thì BỎ QUA kèm lý do, chứ không báo lỗi.
+    Phép đối chiếu chỉ có nghĩa khi hai bên nhìn cùng một mẻ dữ liệu.
+    """
+    db = config.WAREHOUSE_DB
+    newest = 0.0
+    for folder in (config.raw_dir("fragrantica"), config.raw_dir("namperfume")):
+        if folder.exists():
+            for path in folder.rglob("*.jsonl"):
+                newest = max(newest, path.stat().st_mtime)
+    if newest and db.stat().st_mtime < newest:
+        return ("marts cũ hơn dữ liệu bronze — chạy `make silver && make marts` "
+                "rồi test lại")
+    return None
+
+
 def _marts_con():
-    """Kết nối tới kho marts đã dựng, hoặc None nếu chưa có."""
+    """Kết nối tới kho marts đã dựng, hoặc None nếu chưa có / đã cũ."""
     if not HAS_DUCKDB or not config.WAREHOUSE_DB.exists():
+        return None
+    cu = _marts_stale()
+    if cu:
+        SKIPPED.append(cu)
         return None
     con = silver.connect(str(config.WAREHOUSE_DB))
     have = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
@@ -287,7 +312,7 @@ def test_mart_brand_khop_bang_python():
     silver do nhóm test `test_silver_*` ở trên canh.
     """
     con = _marts_con()
-    if con is None and _skip("test_mart_brand: chưa dựng marts (make marts)"):
+    if con is None and _skip("test_mart_brand: marts chưa dựng hoặc đã cũ"):
         return
     try:
         rows = dataset.build(config.raw_dir("fragrantica"),
@@ -306,7 +331,7 @@ def test_mart_brand_khop_bang_python():
 
 def test_mart_accord_khop_bang_python():
     con = _marts_con()
-    if con is None and _skip("test_mart_accord: chưa dựng marts (make marts)"):
+    if con is None and _skip("test_mart_accord: marts chưa dựng hoặc đã cũ"):
         return
     try:
         rows = dataset.build(config.raw_dir("fragrantica"),
@@ -324,7 +349,7 @@ def test_mart_accord_khop_bang_python():
 
 def test_mart_coverage_khop_bang_python():
     con = _marts_con()
-    if con is None and _skip("test_mart_coverage: chưa dựng marts (make marts)"):
+    if con is None and _skip("test_mart_coverage: marts chưa dựng hoặc đã cũ"):
         return
     try:
         root = config.raw_dir("fragrantica")

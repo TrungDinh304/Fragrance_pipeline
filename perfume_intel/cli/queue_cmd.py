@@ -14,6 +14,7 @@ from .. import config
 from ..core import bronze, storage
 from ..pipelines.state import open_state
 from ..sources.fragrantica.models import BrandPerfume
+from ..sources.fragrantica.scraper import SITE
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +43,21 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=run)
 
 
+def _print_cooldown(state) -> None:
+    """Site đang nghỉ thì nói ngay dòng đầu — nếu không, người xem thấy tiến độ
+    đứng im mà không hiểu vì sao."""
+    c = state.site_cooldown(SITE)
+    if not c:
+        return
+    print(f"!! ĐANG NGHỈ tới {c['blocked_until']}")
+    print(f"   do `{c['source']}` ghi lúc {c['recorded_at']}: {c['reason']}")
+    print(f"   Lịch `daily` sẽ bỏ lượt cho tới mốc đó. "
+          f"Muốn chạy ngay: queue --reset-failed")
+    print()
+
+
 def _print_progress(state, min_comments: int = 0) -> None:
+    _print_cooldown(state)
     p = state.progress(min_comments)
     if not p["brands_total"]:
         print("Hàng đợi trống. Nạp bằng:")
@@ -202,7 +217,9 @@ def run(args: argparse.Namespace) -> int:
 
     if args.reset_failed:
         chai, hang = state.reset_failed()
-        log.info("Mở lại %d chai lỗi và %d hãng đang nghỉ.", chai, hang)
+        site = state.clear_site_cooldown()
+        log.info("Mở lại %d chai lỗi, %d hãng đang nghỉ%s.", chai, hang,
+                 " và xoá ghi chú site đang nghỉ" if site else "")
         print()
 
     if args.brand:

@@ -462,6 +462,21 @@ Vài điểm thiết kế đáng biết:
 - **Bị chặn thì cho MỌI hãng nghỉ**, không nhảy sang hãng khác. 429 và thử thách
   Cloudflare là tín hiệu ở mức thiết bị; đổi hãng rồi cào tiếp là hiểu sai vấn đề
   và bị chặn sâu hơn. Hãng lỗi lẻ thì nghỉ dần lâu hơn: 6h → 24h → 72h.
+- **Bị chặn ở BẤT KỲ lệnh nào cũng được ghi vào sổ chung** (bảng `site_cooldown`),
+  và `daily` kiểm sổ trước khi chạy — thấy đang nghỉ thì bỏ lượt, exit code 2.
+
+  Vì sao cần: trước đây chỉ `daily` đụng tới sổ, nên một mẻ `products` dính 429
+  không để lại dấu vết nào. Đã xảy ra thật — `23:12:14` site trả 429 lần cuối,
+  `23:12:19` lịch `daily` bắt đầu gõ cửa tiếp. Giờ mọi lệnh (`crawl`, `brands`,
+  `products`, `links`, `daily`) đều ghi, và lần chặn **nặng hơn luôn thắng** để
+  một lệnh ghi 1 giờ không rút ngắn được lần 12 giờ của lệnh khác.
+
+  ```
+  $ perfume-intel queue
+  !! ĐANG NGHỈ tới 2026-10-02T21:22:17+00:00
+     do `products` ghi lúc 2026-10-02T18:22:17+00:00: HTTP 429
+     Lịch `daily` sẽ bỏ lượt cho tới mốc đó. Muốn chạy ngay: queue --reset-failed
+  ```
 - **Chai đã có trên đĩa được ghi nhận, không tải lại.** Dữ liệu crawl từ trước
   tự động vào sổ mà không tốn request nào.
 

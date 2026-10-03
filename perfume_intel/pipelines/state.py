@@ -69,6 +69,18 @@ CREATE INDEX IF NOT EXISTS ix_perfumes_brand  ON perfumes(brand_key, status);
 CREATE INDEX IF NOT EXISTS ix_perfumes_status ON perfumes(status, comments DESC);
 CREATE INDEX IF NOT EXISTS ix_brands_queue    ON brands(products_status, priority DESC);
 
+-- Site nói "dừng lại" (429 / Cloudflare) thì đó là chuyện của CẢ IP này, không
+-- phải của riêng một hãng hay một lệnh. Để riêng một bảng vì ngữ nghĩa khác hẳn
+-- `brands.blocked_until` (hãng đó lỗi) — và vì mọi lệnh đều phải ghi được vào
+-- đây, kể cả lệnh không đụng gì tới hàng đợi hãng như `brands` hay `links`.
+CREATE TABLE IF NOT EXISTS site_cooldown (
+    site          TEXT PRIMARY KEY,
+    blocked_until TEXT NOT NULL,
+    reason        TEXT,
+    source        TEXT,
+    recorded_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     run_id        TEXT PRIMARY KEY,
     kind          TEXT NOT NULL,
@@ -326,6 +338,51 @@ class CrawlState:
                          (until, brand_key))
         log.info("Hãng %s nghỉ %d giờ (lỗi lần %d).", brand_key, hours, fails)
 
+    # ------------------------------------------------- site nghỉ (chung cả IP)
+    def block_site(self, site: str, hours: float, reason: str,
+                   source: str = "") -> str:
+        """Ghi nhận site đang chặn mình. Trả về mốc hết nghỉ.
+
+        KHÔNG rút ngắn thời gian nghỉ đang có: nếu một lệnh khác vừa ghi 12 giờ
+        mà lệnh này chỉ muốn 1 giờ, giữ 12. Lần chặn nặng hơn luôn thắng — rút
+        ngắn thời gian nghỉ là thứ duy nhất ở đây có thể gây hại thật.
+        """
+        until = (datetime.now(timezone.utc)
+                 + timedelta(hours=hours)).isoformat(timespec="seconds")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT blocked_until FROM site_cooldown WHERE site = ?",
+                (site,)).fetchone()
+            if row and row["blocked_until"] > until:
+                return row["blocked_until"]
+            conn.execute(
+                "INSERT INTO site_cooldown"
+                " (site, blocked_until, reason, source, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(site) DO UPDATE SET"
+                " blocked_until = excluded.blocked_until,"
+                " reason = excluded.reason, source = excluded.source,"
+                " recorded_at = excluded.recorded_at",
+                (site, until, reason, source, _now()))
+        return until
+
+    def site_cooldown(self, site: str) -> dict | None:
+        """Site có đang trong thời gian nghỉ không? Hết hạn thì trả None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM site_cooldown WHERE site = ? AND blocked_until > ?",
+                (site, _now())).fetchone()
+        return dict(row) if row else None
+
+    def clear_site_cooldown(self, site: str | None = None) -> int:
+        with self._conn() as conn:
+            if site:
+                cur = conn.execute("DELETE FROM site_cooldown WHERE site = ?",
+                                   (site,))
+            else:
+                cur = conn.execute("DELETE FROM site_cooldown")
+            return cur.rowcount
+
     def block_all(self, hours: float, reason: str) -> int:
         """Bị chặn cả IP -> cho MỌI hãng nghỉ, không riêng hãng đang làm.
 
@@ -471,3 +528,32 @@ def open_state(path: Path | None = None) -> CrawlState:
 
 
 __all__ = ["CrawlState", "BrandWork", "open_state", "PENDING", "DONE", "FAILED"]
+
+
+# Bị chặn thì nghỉ bao lâu, nếu phía gọi không nói gì. Khớp
+# `daily.BLOCK_COOLDOWN_HOURS` để mọi lệnh cư xử như nhau.
+DEFAULT_BLOCK_HOURS = 12.0
+
+
+def record_block(site: str, exc: BaseException, source: str,
+                 hours: float = DEFAULT_BLOCK_HOURS,
+                 db: Path | None = None) -> str | None:
+    """Ghi vào sổ rằng site vừa chặn mình. Dùng chung cho MỌI lệnh.
+
+    Vì sao cần: trước đây chỉ `daily` biết chuyện bị chặn, vì chỉ nó đụng tới
+    sổ. Một mẻ `products` dính 429 thì không để lại dấu vết nào, nên lượt `daily`
+    ngay sau đó lao vào đúng lúc site đang khó chịu nhất. Đã xảy ra thật:
+    23:12:14 site trả 429 lần cuối, 23:12:19 `daily` bắt đầu gõ cửa tiếp.
+
+    Hàm này KHÔNG được làm hỏng lệnh đang chạy: sổ ghi không được thì chỉ cảnh
+    báo rồi thôi — mất một ghi chú còn hơn mất cả mẻ dữ liệu vừa crawl.
+    """
+    try:
+        state = open_state(db)
+        until = state.block_site(site, hours, str(exc).splitlines()[0], source)
+        log.warning("Đã ghi vào sổ: tạm nghỉ %s tới %s (nguồn: %s). "
+                    "Mọi lệnh khác sẽ thấy và tránh ra.", site, until, source)
+        return until
+    except Exception:
+        log.warning("Không ghi được ghi chú bị chặn vào sổ.", exc_info=True)
+        return None

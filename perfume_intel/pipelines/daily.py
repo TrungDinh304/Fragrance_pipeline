@@ -77,9 +77,14 @@ class DailyReport:
     def perfumes_failed(self) -> int:
         return sum(b.perfumes_failed for b in self.brands)
 
+    # Hai lý do dừng được coi là KHÔNG ổn, vì cả hai đều nghĩa là site đang
+    # không muốn tiếp: vừa bị chặn, hoặc đang trong thời gian nghỉ do một lệnh
+    # khác ghi lại. Bộ lên lịch dựa vào exit code này để ghi cảnh báo.
+    NOT_OK = ("bị chặn", "site đang nghỉ")
+
     @property
     def ok(self) -> bool:
-        return self.stopped_reason != "bị chặn"
+        return self.stopped_reason not in self.NOT_OK
 
 
 class _Budget:
@@ -191,6 +196,25 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     report = DailyReport(budget=budget)
+
+    # Site vừa chặn mình (có thể do lệnh KHÁC, vd một mẻ `products`)? Thì bỏ
+    # lượt này. Không có bước kiểm này thì lịch cứ thế lao vào đúng lúc site
+    # đang khó chịu nhất — đã xảy ra thật: 23:12:14 site trả 429 lần cuối,
+    # 23:12:19 `daily` bắt đầu gõ cửa tiếp.
+    cooldown = state.site_cooldown(SITE)
+    if cooldown:
+        report.run_id = state.start_run("daily", budget)
+        report.stopped_reason = "site đang nghỉ"
+        log.warning("Bỏ lượt: %s đang trong thời gian nghỉ tới %s (do `%s` ghi "
+                    "lúc %s: %s). Chạy lại sau mốc đó, hoặc xoá bằng "
+                    "`queue --reset-failed`.",
+                    SITE, cooldown["blocked_until"], cooldown["source"],
+                    cooldown["recorded_at"], cooldown["reason"])
+        state.finish_run(report.run_id, requests_used=0, brands_touched=0,
+                         perfumes_done=0, perfumes_failed=0,
+                         stopped_reason=report.stopped_reason)
+        return report
+
     report.run_id = state.start_run("daily", budget)
     counter = _Budget(budget)
     opts = CrawlOptions(format=fmt, resume=True)
@@ -232,6 +256,8 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
             outcome.pending_left = detail["perfumes_pending"] if detail else 0
     except (RateLimited, Blocked) as exc:
         report.stopped_reason = "bị chặn"
+        state.block_site(SITE, BLOCK_COOLDOWN_HOURS,
+                         str(exc).splitlines()[0], "daily")
         n = state.block_all(BLOCK_COOLDOWN_HOURS, str(exc).splitlines()[0])
         log.error("Bị chặn — cho %d hãng nghỉ %d giờ. %s",
                   n, BLOCK_COOLDOWN_HOURS, str(exc).splitlines()[0])

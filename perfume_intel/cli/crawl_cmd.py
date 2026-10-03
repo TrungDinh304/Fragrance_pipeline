@@ -15,6 +15,7 @@ from .. import config
 from ..core.bronze import PERFUME
 from ..core import csv_input
 from ..core.csv_input import read_urls_file
+from ..pipelines.state import record_block
 from ..core.http import Blocked, RateLimited
 from ..pipelines.crawl import CrawlOptions, crawl_directory, crawl_urls, read_pairs
 from ..sources.base import SiteScraper
@@ -149,6 +150,8 @@ def run(args: argparse.Namespace) -> int:
         return 0 if count else 1
     except (RateLimited, Blocked) as exc:
         log.error("%s", exc)
+        # Ghi vào sổ để MỌI lệnh khác (nhất là lịch `daily`) biết mà tránh ra.
+        record_block(scraper.site, exc, "crawl")
         return 2
     except KeyboardInterrupt:
         log.warning("Đã dừng theo yêu cầu người dùng.")
