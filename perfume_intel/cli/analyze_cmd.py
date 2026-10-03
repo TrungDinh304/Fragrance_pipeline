@@ -20,9 +20,6 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--community", type=Path,
                    help="Thư mục .jsonl Fragrantica "
                         "(mặc định: data/raw/fragrantica)")
-    p.add_argument("--market", type=Path,
-                   help="Thư mục .jsonl namperfume để đối chiếu giá/độ phủ "
-                        "(mặc định: data/raw/namperfume nếu có)")
     p.add_argument("--out", type=Path,
                    help="Thư mục ghi kết quả "
                         "(mặc định: data/processed/<YYYYMMDD>)")
@@ -42,12 +39,7 @@ def run(args: argparse.Namespace) -> int:
                   "Chạy `perfume-intel crawl <thư mục CSV>` trước.", community)
         return 1
 
-    market = args.market
-    if market is None:
-        default_market = config.raw_dir("namperfume")
-        market = default_market if default_market.exists() else None
-
-    rows = dataset.build(community, market)
+    rows = dataset.build(community)
     if not rows:
         log.error("Không đọc được bản ghi nào trong %s", community)
         return 1

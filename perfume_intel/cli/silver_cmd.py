@@ -25,9 +25,6 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--community", type=Path,
                    help="Thư mục bronze Fragrantica "
                         "(mặc định: data/raw/fragrantica)")
-    p.add_argument("--market", type=Path,
-                   help="Thư mục bronze namperfume "
-                        "(mặc định: data/raw/namperfume nếu có)")
     p.add_argument("--out", type=Path,
                    help=f"Nơi ghi Parquet (mặc định: {config.SILVER_DIR})")
     p.add_argument("--sql", metavar="CÂU_LỆNH",
@@ -77,8 +74,7 @@ def run(args: argparse.Namespace) -> int:
         log.error("Chưa có dữ liệu bronze: %s", community)
         return 1
 
-    report = silver.build(community=community, market=args.market,
-                          out_dir=out_dir)
+    report = silver.build(community=community, out_dir=out_dir)
     print()
     print(f"Tổng {report.total():,} dòng -> {report.out_dir}"
           .replace(",", "."))

@@ -16,8 +16,7 @@ per_brand as (
         brand,
         count(*)                                           as perfumes,
         sum(coalesce(rating_count, 0))                     as rating_votes,
-        avg(rating)                                        as rating_avg,
-        count(*) filter (where listed)                     as listed_on_market
+        avg(rating)                                        as rating_avg
     from {{ ref('stg_perfumes') }}
     where brand is not null
     group by 1
@@ -44,8 +43,7 @@ select
                      * w.vote_weighted
                + (1 - w.rated_votes::double / (w.rated_votes + g.prior_votes))
                      * g.overall
-        end, 3)                                             as rating_weighted,
-    b.listed_on_market
+        end, 3)                                             as rating_weighted
 from per_brand b
 left join weighted w using (brand)
 cross join {{ ref('stg_global_rating') }} g

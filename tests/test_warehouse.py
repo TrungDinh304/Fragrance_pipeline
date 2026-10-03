@@ -54,8 +54,6 @@ BRAND = {"brand_url": "https://f.com/designers/Dior.html",
 PRODUCT = {"perfume_url": "https://f.com/perfume/Dior/Sauvage-1.html",
            "brand_url": "https://f.com/designers/Dior.html",
            "brand_name": "Dior", "perfume_name": "Sauvage", "comments": 120}
-MARKET = {"url": "https://namperfume.net/products/dior-sauvage",
-          "name": "Dior Sauvage", "brand": "Dior", "price": "2.500.000đ"}
 
 
 def write(path: Path, records) -> None:
@@ -65,13 +63,12 @@ def write(path: Path, records) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def workspace(tmp: Path) -> tuple[Path, Path]:
-    frag, nam = tmp / "fragrantica", tmp / "namperfume"
+def workspace(tmp: Path) -> Path:
+    frag = tmp / "fragrantica"
     write(bronze.dir_for(frag, bronze.PERFUME) / "p.jsonl", [PERFUME])
     write(bronze.dir_for(frag, bronze.BRAND) / "b.jsonl", [BRAND])
     write(bronze.dir_for(frag, bronze.BRAND_PERFUME) / "c.jsonl", [PRODUCT])
-    write(bronze.dir_for(nam, bronze.PERFUME) / "m.jsonl", [MARKET])
-    return frag, nam
+    return frag
 
 
 # ----------------------------------------------------------------- tầng silver
@@ -80,8 +77,8 @@ def test_silver_dung_du_bay_bang():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        report = silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        report = silver.build(frag, out_dir=tmp / "silver")
         assert set(report.counts) == set(silver.TABLES)
         for name in silver.TABLES:
             assert (tmp / "silver" / f"{name}.parquet").exists(), name
@@ -94,8 +91,8 @@ def test_silver_trai_phang_cai_long_nhau():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        report = silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        report = silver.build(frag, out_dir=tmp / "silver")
         assert report.counts["perfumes"] == 1
         assert report.counts["perfume_accords"] == 2
         assert report.counts["perfume_notes"] == 4      # 1 top, 1 middle, 2 base
@@ -109,8 +106,8 @@ def test_silver_dat_kieu_that_chu_khong_de_chuoi():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        silver.build(frag, out_dir=tmp / "silver")
         con = silver.connect()
         silver.read_silver(con, tmp / "silver")
         kinds = dict(con.execute(
@@ -133,28 +130,11 @@ def test_silver_khu_trung_giu_ban_moi_nhat():
         # không tình cờ cho ra đúng kết quả.
         write(bronze.dir_for(frag, bronze.PERFUME) / "a_moi.jsonl", [moi])
         write(bronze.dir_for(frag, bronze.PERFUME) / "z_cu.jsonl", [cu])
-        report = silver.build(frag, None, out_dir=tmp / "silver")
+        report = silver.build(frag, out_dir=tmp / "silver")
         assert report.counts["perfumes"] == 1
         con = silver.connect()
         silver.read_silver(con, tmp / "silver")
         assert con.execute("SELECT rating FROM perfumes").fetchone()[0] == 4.9
-
-
-def test_silver_ghep_duoc_gia_thi_truong():
-    """Ghép `perfumes.des_key` với `market.market_key`. Ghép ngược chiều thì mọi
-    chai đều "không bán ở VN" mà không có lỗi nào."""
-    if not HAS_DUCKDB and _skip("test_silver_ghep_gia: chưa cài duckdb"):
-        return
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        frag, nam = workspace(tmp)
-        silver.build(frag, nam, out_dir=tmp / "silver")
-        con = silver.connect()
-        silver.read_silver(con, tmp / "silver")
-        got = con.execute(
-            "SELECT m.price FROM perfumes p "
-            "JOIN market m ON p.des_key = m.market_key").fetchall()
-        assert got == [("2.500.000đ",)], got
 
 
 def test_silver_noi_duoc_muc_luc_voi_chi_tiet():
@@ -164,36 +144,14 @@ def test_silver_noi_duoc_muc_luc_voi_chi_tiet():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        silver.build(frag, out_dir=tmp / "silver")
         con = silver.connect()
         silver.read_silver(con, tmp / "silver")
         got = con.execute(
             "SELECT COUNT(*), COUNT(p.perfume_key) FROM brand_perfumes b "
             "LEFT JOIN perfumes p USING (perfume_key)").fetchone()
         assert got == (1, 1), got
-
-
-def test_silver_giu_lien_ket_ve_site_cua_minh():
-    """`market.des_key` trỏ về trang sản phẩm trên site của CHÍNH MÌNH, không
-    phải khoá ghép với Fragrantica (đó là `market_key`). Hai cột nhìn giống
-    nhau; hoán đổi thì không có lỗi nào, chỉ là mất hẳn liên kết về site nhà."""
-    if not HAS_DUCKDB and _skip("test_silver_lien_ket_site: chưa cài duckdb"):
-        return
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        frag = tmp / "fragrantica"
-        nam = tmp / "namperfume"
-        write(bronze.dir_for(frag, bronze.PERFUME) / "p.jsonl", [PERFUME])
-        write(bronze.dir_for(nam, bronze.PERFUME) / "m.jsonl",
-              [dict(MARKET, des_url="https://yupi.vn/products/dior-sauvage")])
-        silver.build(frag, nam, out_dir=tmp / "silver")
-        con = silver.connect()
-        silver.read_silver(con, tmp / "silver")
-        market_key, des_key = con.execute(
-            "SELECT market_key, des_key FROM market").fetchone()
-        assert "namperfume.net" in market_key, market_key
-        assert "yupi.vn" in des_key, des_key
 
 
 def test_silver_giu_do_manh_cua_accord():
@@ -203,8 +161,8 @@ def test_silver_giu_do_manh_cua_accord():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        silver.build(frag, out_dir=tmp / "silver")
         con = silver.connect()
         silver.read_silver(con, tmp / "silver")
         got = con.execute("SELECT accord, width, opacity FROM perfume_accords "
@@ -222,8 +180,8 @@ def test_silver_noi_duoc_muc_luc_voi_danh_muc_hang():
         return
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        frag, nam = workspace(tmp)
-        silver.build(frag, nam, out_dir=tmp / "silver")
+        frag = workspace(tmp)
+        silver.build(frag, out_dir=tmp / "silver")
         con = silver.connect()
         silver.read_silver(con, tmp / "silver")
         got = con.execute(
@@ -241,7 +199,7 @@ def test_silver_khong_rong_thi_khop_so_voi_loader_python():
     if not root.exists() and _skip("test_silver_khop_python: chưa có dữ liệu thật"):
         return
     with tempfile.TemporaryDirectory() as td:
-        report = silver.build(root, None, out_dir=Path(td))
+        report = silver.build(root, out_dir=Path(td))
         assert report.counts["perfumes"] == len(dataset.load_raw(root))
 
 
@@ -315,16 +273,14 @@ def test_mart_brand_khop_bang_python():
     if con is None and _skip("test_mart_brand: marts chưa dựng hoặc đã cũ"):
         return
     try:
-        rows = dataset.build(config.raw_dir("fragrantica"),
-                             config.raw_dir("namperfume"))
+        rows = dataset.build(config.raw_dir("fragrantica"))
         py = {r["brand"]: r for r in metrics.by_brand(rows)}
         sql = {r[0]: r for r in con.execute(
             "SELECT brand, perfumes, rating_votes, attention_share_pct, "
-            "rating_avg, rating_weighted, listed_on_market "
-            "FROM mart_brand").fetchall()}
+            "rating_avg, rating_weighted FROM mart_brand").fetchall()}
         _compare("mart_brand", py, sql,
                  ["perfumes", "rating_votes", "attention_share_pct",
-                  "rating_avg", "rating_weighted", "listed_on_market"])
+                  "rating_avg", "rating_weighted"])
     finally:
         con.close()
 
@@ -334,8 +290,7 @@ def test_mart_accord_khop_bang_python():
     if con is None and _skip("test_mart_accord: marts chưa dựng hoặc đã cũ"):
         return
     try:
-        rows = dataset.build(config.raw_dir("fragrantica"),
-                             config.raw_dir("namperfume"))
+        rows = dataset.build(config.raw_dir("fragrantica"))
         py = {r["accord"]: r for r in metrics.by_accord(rows)}
         sql = {r[0]: r for r in con.execute(
             "SELECT accord, perfumes, coverage_pct, avg_strength, "
@@ -353,7 +308,7 @@ def test_mart_coverage_khop_bang_python():
         return
     try:
         root = config.raw_dir("fragrantica")
-        rows = dataset.build(root, config.raw_dir("namperfume"))
+        rows = dataset.build(root)
         py = {r["brand"]: r for r in metrics.coverage(rows,
                                                       dataset.load_catalog(root))}
         sql = {r[0]: r for r in con.execute(

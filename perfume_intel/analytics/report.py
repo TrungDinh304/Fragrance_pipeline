@@ -45,7 +45,6 @@ def overview(rows: list[Row]) -> dict[str, Any]:
         "with_performance": sum(1 for r in rows if r.longevity or r.sillage),
         # Chưa crawl được own/had/want; số này để theo dõi khi parser bổ sung xong.
         "with_ownership": sum(1 for r in rows if r.have_it is not None),
-        "listed_on_market": sum(1 for r in rows if r.listed),
     }
 
 

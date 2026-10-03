@@ -102,23 +102,6 @@ def test_moi_hinh_deu_noi_cach_doc():
         assert figure.how or figure.empty, f"{figure.key}: không có câu cách đọc"
 
 
-def test_thieu_du_lieu_thi_de_trong_kem_ly_do_chu_khong_ve_bua():
-    """Không ghép được namperfume thì KHÔNG được xếp hạng chai nhiều vote rồi
-    gọi đó là "khoảng trống thị trường" — đó là một câu khác hẳn."""
-    figure = charts.market_gap_chart(sample())
-    assert figure.empty, "listed=0 mà vẫn vẽ khoảng trống thị trường"
-    assert "namperfume" in figure.empty
-    assert not figure.svg
-
-
-def test_co_du_lieu_thi_trường_thi_ve_that():
-    rows = sample()
-    rows[0].listed = True
-    figure = charts.market_gap_chart(rows)
-    assert not figure.empty
-    assert figure.svg
-
-
 def test_khong_co_du_lieu_thi_moi_hinh_deu_de_trong_chu_khong_no():
     for figure in charts.build_all([]):
         assert figure.empty, f"{figure.key}: rỗng dữ liệu mà vẫn vẽ"
@@ -247,12 +230,6 @@ def test_ghi_chu_dem_ca_chai_bi_loai_vi_qua_cu():
     rows[0].year = 1990
     figure = charts.by_year(rows, since=2010)
     assert "trước 2010" in figure.note
-
-
-def test_thong_tin_dau_trang_khong_bia_so_thi_truong():
-    rows = sample()
-    kpis = dict((k, v) for k, v, _ in charts.headline(rows))
-    assert kpis["Có bán ở VN"] == "0"
 
 
 if __name__ == "__main__":

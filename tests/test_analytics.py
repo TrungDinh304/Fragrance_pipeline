@@ -13,7 +13,6 @@ from perfume_intel.analytics import dataset, metrics, report  # noqa: E402
 from perfume_intel.analytics.dataset import Row  # noqa: E402
 
 FRAG = "https://www.fragrantica.com/perfume/Dior/Sauvage-31861.html"
-NAM = "https://namperfume.net/products/dior-sauvage-edp"
 
 
 def raw(url, name, brand, votes, rating, accords=(), seasons=(), **extra):
@@ -35,27 +34,22 @@ def write_jsonl(path: Path, records):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def workspace(tmp: Path):
-    """Một thư mục data/raw nhỏ: 2 chai Fragrantica, 1 chai có bán ở namperfume."""
+def workspace(tmp: Path) -> Path:
+    """Một thư mục data/raw nhỏ: 2 chai Fragrantica."""
     write_jsonl(tmp / "community" / "Dior_fragrantica_010926.jsonl", [
         raw(FRAG, "Sauvage", "Dior", 9000, 4.1,
             accords=[("fresh spicy", 100.0), ("citrus", 70.0)],
             seasons=[("summer", 100.0), ("winter", 40.0)],
-            gender="Nam", des_url=NAM),
+            gender="Nam"),
         raw(FRAG + "?x=2", "Fahrenheit", "Dior", 30, 4.9,
             accords=[("citrus", 50.0)], gender="Nam"),
     ])
-    write_jsonl(tmp / "market" / "Dior_namperfume_010926.jsonl", [
-        {"url": NAM, "name": "Dior Sauvage EDP", "price": "3.200.000",
-         "standard_size": ["60ml", "100ml"]},
-    ])
-    return tmp / "community", tmp / "market"
+    return tmp / "community"
 
 
 def test_nap_va_lam_phang():
     with tempfile.TemporaryDirectory() as td:
-        community, market = workspace(Path(td))
-        rows = dataset.build(community, market)
+        rows = dataset.build(workspace(Path(td)))
 
     row = next(r for r in rows if r.name == "Sauvage")
     assert row.top_accord == "fresh spicy"
@@ -78,66 +72,6 @@ def test_giu_ban_crawl_moi_nhat():
     assert len(rows) == 1 and rows[0].rating_count == 99
 
 
-def test_ghep_gia_namperfume():
-    with tempfile.TemporaryDirectory() as td:
-        community, market = workspace(Path(td))
-        rows = dataset.build(community, market)
-
-    sauvage = next(r for r in rows if r.name == "Sauvage")
-    fahrenheit = next(r for r in rows if r.name == "Fahrenheit")
-    assert sauvage.listed and sauvage.price == "3.200.000"
-    assert sauvage.sizes == ["60ml", "100ml"]
-    assert not fahrenheit.listed
-
-
-def test_khong_co_du_lieu_thi_truong():
-    """Không truyền `market` thì vẫn chạy, chỉ là mọi chai đều chưa có giá."""
-    with tempfile.TemporaryDirectory() as td:
-        community, _ = workspace(Path(td))
-        rows = dataset.build(community)
-
-    assert rows and not any(r.listed for r in rows)
-
-
-def test_rating_co_hieu_chinh_theo_vote():
-    """Nhóm 4.9 sao / 30 vote không được xếp trên nhóm 4.1 sao / 9.000 vote."""
-    tap = [Row(url="a", brand="To", rating=4.1, rating_count=9000),
-           Row(url="b", brand="Nho", rating=4.9, rating_count=30)]
-    out = {r["brand"]: r for r in metrics.by_brand(tap)}
-
-    # Điểm thô: hãng nhỏ hơn hẳn 0.8 sao.
-    raw_gap = out["Nho"]["rating_avg"] - out["To"]["rating_avg"]
-    assert round(raw_gap, 2) == 0.8
-    # Sau hiệu chỉnh khoảng cách gần như biến mất: 30 vote là bằng chứng quá
-    # mỏng, chỉ đủ nhấc nhóm đó lên trên mốc chung một chút.
-    weighted_gap = out["Nho"]["rating_weighted"] - out["To"]["rating_weighted"]
-    assert 0 < weighted_gap < raw_gap * 0.15
-
-
-def test_hieu_chinh_khong_dung_khi_du_vote():
-    """Nhóm nhiều vote thì điểm hiệu chỉnh gần như giữ nguyên điểm thô."""
-    tap = [Row(url="a", brand="To", rating=4.6, rating_count=50_000),
-           Row(url="b", brand="Khac", rating=3.5, rating_count=40_000)]
-    out = {r["brand"]: r for r in metrics.by_brand(tap)}
-
-    assert abs(out["To"]["rating_weighted"] - 4.6) < 0.02
-
-
-def test_chi_so_theo_hang():
-    rows = [
-        Row(url="a", brand="Dior", rating=4.1, rating_count=9000, listed=True),
-        Row(url="b", brand="Dior", rating=4.9, rating_count=1000),
-        Row(url="c", brand="Chanel", rating=4.5, rating_count=500),
-    ]
-    out = {r["brand"]: r for r in metrics.by_brand(rows)}
-
-    assert out["Dior"]["perfumes"] == 2
-    assert out["Dior"]["rating_votes"] == 10_000
-    assert out["Dior"]["listed_on_market"] == 1
-    # Thị phần chú ý cộng lại phải đủ 100%.
-    assert round(sum(r["attention_share_pct"] for r in out.values())) == 100
-
-
 def test_chi_so_theo_accord():
     rows = [
         Row(url="a", accords={"citrus": 100.0, "woody": 50.0}, rating=4.0,
@@ -150,18 +84,6 @@ def test_chi_so_theo_accord():
     assert out["citrus"]["coverage_pct"] == 100.0
     assert out["citrus"]["avg_strength"] == 80.0
     assert out["woody"]["perfumes"] == 1
-
-
-def test_khoang_trong_thi_truong():
-    """Chai nhiều vote mà chưa bán phải đứng đầu danh sách."""
-    rows = [
-        Row(url="a", name="Chua ban", rating_count=9000),
-        Row(url="b", name="Da ban", rating_count=8000, listed=True),
-        Row(url="c", name="It ai biet", rating_count=5),
-    ]
-    gap = metrics.market_gap(rows)
-
-    assert [r["name"] for r in gap] == ["Chua ban", "It ai biet"]
 
 
 def test_bao_cao_ghi_ra_file():

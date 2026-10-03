@@ -71,7 +71,6 @@ def headline(rows: list[Row], catalog=None) -> list[tuple[str, str, str]]:
     accords = {a for r in rows for a in r.accords}
     notes = {n for r in rows for n in r.notes}
     votes = sum(r.rating_count or 0 for r in rows)
-    listed = sum(1 for r in rows if r.listed)
     tiles = [
         ("Chai có chi tiết", svg.thousands(len(rows)), "đã crawl xong"),
         ("Hãng", svg.thousands(len({r.brand for r in rows if r.brand})),
@@ -89,9 +88,6 @@ def headline(rows: list[Row], catalog=None) -> list[tuple[str, str, str]]:
             "Độ phủ", f"{100 * done / total:.1f}%" if total else "—",
             f"{svg.thousands(done)}/{svg.thousands(total)} chai của "
             f"{svg.thousands(len(catalog.products))} hãng đã có mục lục"))
-    tiles.append(
-        ("Có bán ở VN", svg.thousands(listed),
-         "ghép được với namperfume" if listed else "chưa ghép được chai nào"))
     return tiles
 
 
@@ -507,61 +503,8 @@ def by_year(rows: list[Row], since: int = 2000) -> Figure:
     )
 
 
-# -------------------------------------------------------- 6. khoảng trống VN
-def market_gap_chart(rows: list[Row], top: int = 15) -> Figure:
-    listed = sum(1 for r in rows if r.listed)
-    if not listed:
-        return Figure(
-            key="market_gap",
-            title="Khoảng trống thị trường VN",
-            how="",
-            empty="Chưa ghép được chai Fragrantica nào với namperfume, nên "
-                  "KHÔNG thể nói chai nào đang thiếu ở VN. Hình này cố tình để "
-                  "trống thay vì xếp hạng chai nhiều vote rồi gọi đó là "
-                  "“khoảng trống” — không có phía đối chiếu thì đó chỉ là danh "
-                  "sách chai được nói nhiều.\n"
-                  "Cần: crawl namperfume và điền `des_url` trỏ từ chai "
-                  "Fragrantica sang trang sản phẩm tương ứng.")
-
-    missing = [r for r in rows if not r.listed and r.rating_count]
-    missing.sort(key=lambda r: r.rating_count or 0, reverse=True)
-    missing = missing[:top]
-
-    pad_l, pad_t, pad_r, pad_b = 240, 10, 56, 26
-    bh, gap = 22, 6
-    height = pad_t + (bh + gap) * len(missing) + pad_b
-    biggest = max(r.rating_count or 0 for r in missing)
-    x = svg.Linear(0, biggest, pad_l, W - pad_r)
-
-    parts: list[str] = []
-    for i, row in enumerate(missing):
-        y = pad_t + i * (bh + gap)
-        label = f"{row.name} — {row.brand}"
-        parts.append(svg.text(pad_l - 10, y + bh / 2 + 4, label[:40],
-                              cls="lbl", anchor="end"))
-        w = x(row.rating_count or 0) - pad_l
-        parts.append(svg.rect(pad_l, y, w, bh, "var(--series-1)", rx=4,
-                              title=f"{label}: "
-                                    f"{svg.thousands(row.rating_count)} vote"))
-        parts.append(svg.text(pad_l + w + 8, y + bh / 2 + 4,
-                              svg.compact(row.rating_count), cls="mark-lbl"))
-
-    return Figure(
-        key="market_gap",
-        title="Khoảng trống thị trường VN",
-        how="Chai được cộng đồng Fragrantica nói nhiều nhưng chưa thấy bán ở "
-            "namperfume.",
-        svg=svg.svg(W, height, "".join(parts), "Cột ngang khoảng trống thị trường"),
-        columns=["Chai", "Hãng", "Điểm", "Lượt vote", "Accord chính"],
-        rows=[[r.name or "", r.brand or "", svg.decimal(r.rating),
-               svg.thousands(r.rating_count), r.top_accord or "—"]
-              for r in missing],
-        note=f"Đã ghép được {svg.thousands(listed)} chai với namperfume.",
-    )
-
-
 FIGURES = (accord_season, brand_map, longevity_by_accord, note_pairs,
-           by_year, market_gap_chart)
+           by_year)
 
 
 def build_all(rows: list[Row]) -> list[Figure]:

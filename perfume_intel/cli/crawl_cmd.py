@@ -1,6 +1,6 @@
 """Lệnh `crawl` — lấy dữ liệu từ một site về `data/raw/<site>/`.
 
-Cùng một lệnh dùng cho mọi site; `--site` chọn scraper. Nguồn URL có thể là:
+`--site` chọn scraper (hiện chỉ có fragrantica). Nguồn URL có thể là:
 URL trực tiếp, một file CSV/text, cả một thư mục CSV, hoặc trang hãng
 (`--designer`, chỉ Fragrantica).
 """
@@ -20,14 +20,12 @@ from ..core.http import Blocked, RateLimited
 from ..pipelines.crawl import CrawlOptions, crawl_directory, crawl_urls, read_pairs
 from ..sources.base import SiteScraper
 from ..sources.fragrantica.scraper import FragranticaScraper
-from ..sources.namperfume.scraper import NamperfumeScraper
 from .options import build_fetcher, crawl_options, fetch_args, output_args
 
 log = logging.getLogger(__name__)
 
 SCRAPERS: dict[str, type[SiteScraper]] = {
     FragranticaScraper.site: FragranticaScraper,
-    NamperfumeScraper.site: NamperfumeScraper,
 }
 
 

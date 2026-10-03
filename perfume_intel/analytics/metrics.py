@@ -92,7 +92,6 @@ def by_brand(rows: list[Row]) -> list[dict[str, Any]]:
             "attention_share_pct": round(100 * votes / total_votes, 2),
             "rating_avg": _mean(r.rating for r in group),
             "rating_weighted": _weighted_rating(group, overall),
-            "listed_on_market": sum(1 for r in group if r.listed),
         })
     return _sorted_rows(out, "rating_votes")
 
@@ -152,29 +151,8 @@ def by_season(rows: list[Row]) -> list[dict[str, Any]]:
             "perfumes": len(group),
             "share_pct": round(100 * len(group) / len(voted), 2) if voted else None,
             "rating_weighted": _weighted_rating(group, overall),
-            "listed_on_market": sum(1 for r in group if r.listed),
         })
     return _sorted_rows(out, "perfumes")
-
-
-def market_gap(rows: list[Row]) -> list[dict[str, Any]]:
-    """Chai được cộng đồng chú ý nhiều nhưng chưa thấy bán ở namperfume.
-
-    Chỉ có nghĩa khi tập dữ liệu đã được ghép với namperfume (`--market`);
-    không có thì mọi chai đều `listed=False` và danh sách này vô nghĩa.
-    """
-    missing = [r for r in rows if not r.listed and r.rating_count]
-    missing.sort(key=lambda r: r.rating_count or 0, reverse=True)
-    return [{
-        "name": r.name,
-        "brand": r.brand,
-        "gender": r.gender,
-        "rating": r.rating,
-        "rating_votes": r.rating_count,
-        "top_accord": r.top_accord,
-        "top_season": r.top_season,
-        "url": r.url,
-    } for r in missing]
 
 
 def coverage(rows: list[Row], catalog) -> list[dict[str, Any]]:
@@ -221,5 +199,4 @@ METRICS: dict[str, Metric] = {
     "accord": by_accord,
     "gender": by_gender,
     "season": by_season,
-    "market_gap": market_gap,
 }

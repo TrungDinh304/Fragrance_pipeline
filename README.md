@@ -3,7 +3,6 @@
 Thu thập dữ liệu nước hoa rồi phân tích thị trường dựa trên **tín hiệu cộng
 đồng** (rating, vote accord, vote mùa, độ lưu/toả hương) từ
 [fragrantica.com](https://www.fragrantica.com/), đối chiếu với giá và độ phủ
-hàng thật trên [namperfume.net](https://namperfume.net).
 
 Hai nửa tách rời nhau:
 
@@ -55,7 +54,6 @@ Cả `data/` lẫn `.cache/` đều không commit.
 make help                            # xem nhanh các lệnh
 make crawl                           # crawl data/inputs/fragrantica -> data/raw/fragrantica
 make crawl data/inputs/fragrantica   # chỉ định thư mục khác
-make nam                             # crawl namperfume.net
 make mini                            # ghép bản mini (offline)
 make brands                          # danh mục hãng -> data/raw/fragrantica/
 make products                        # chai của từng hãng -> data/raw/fragrantica/
@@ -93,9 +91,6 @@ python -m perfume_intel crawl data/inputs/fragrantica --render --resume
 
 # 5. File text, mỗi dòng một URL (dòng bắt đầu bằng '#' bị bỏ qua)
 python -m perfume_intel crawl links.txt
-
-# 6. namperfume.net (không cần --render, dữ liệu có sẵn trong HTML)
-python -m perfume_intel crawl --site namperfume data/inputs/namperfume
 
 # 7. Chỉ liệt kê link có trong một trang, không crawl chi tiết
 python -m perfume_intel links https://www.fragrantica.com/designers/Dior.html
@@ -277,7 +272,6 @@ perfume_notes   5738   DÀI: một dòng một (chai, tầng, note)
 perfume_wear    3768   DÀI: một dòng một (chai, trục hoàn cảnh)
 brands          8235   danh mục hãng
 brand_perfumes  7938   mục lục chai của hãng
-market             4   giá namperfume
 ```
 
 Khi accord còn nằm trong mảng JSON, câu *“accord nào phổ biến dần lên theo năm”*
@@ -316,10 +310,6 @@ cách rất thuyết phục.
 - **Thư mục `target/` của dbt không được nằm trong `data/`.** Nó chứa cache parse
   theo đường dẫn tuyệt đối; để trong bind mount thì container đọc nhầm cache của
   host rồi chết với `KeyError: dbt_duckdb://macros/catalog.sql`.
-- **`market.des_key` không phải khoá ghép.** Khoá ghép với Fragrantica là
-  `market_key` (URL namperfume); `des_key` trỏ về trang sản phẩm trên site của
-  chính mình. Hai cột nhìn giống nhau, hoán đổi thì mất hẳn liên kết về site nhà
-  mà không có lỗi nào.
 
 ### Có cần tới mức này không
 
@@ -558,7 +548,7 @@ python -m perfume_intel analyze --metric brand --metric accord    # chỉ vài b
 python -m perfume_intel analyze --out data/processed/thu-nghiem
 ```
 
-Đọc `data/raw/fragrantica/` (và `data/raw/namperfume/` nếu có), ghi ra
+Đọc `data/raw/fragrantica/`, ghi ra
 `data/processed/<YYYYMMDD>/`:
 
 | File | Nội dung |
@@ -567,7 +557,6 @@ python -m perfume_intel analyze --out data/processed/thu-nghiem
 | `accord.csv` | Mỗi accord: độ phủ, độ mạnh trung bình, điểm có hiệu chỉnh |
 | `gender.csv` | Cơ cấu Nam / Nữ / Unisex |
 | `season.csv` | Mùa nào đang nhiều/ít hàng (theo vote when-to-wear) |
-| `market_gap.csv` | Chai nhiều vote nhưng chưa thấy bán ở namperfume |
 | `coverage.csv` | Mỗi hãng: có bao nhiêu chai, đã crawl chi tiết bao nhiêu |
 | `summary.json` | Số tổng quan của cả lần chạy |
 | **`report.html`** | **Sáu biểu đồ để người đọc — mở bằng double-click** |
@@ -597,7 +586,6 @@ Mở bằng double-click, **không cần mạng và không cần server**. Tắt
 | Accord nào lưu hương lâu | cột xếp chồng lưỡng hướng | accord nào bám lâu, accord nào bay nhanh |
 | Note nào đi với note nào | heatmap có điều kiện | có note A thì bao nhiêu % cũng có note B |
 | Số chai theo năm ra mắt | cột xếp chồng theo giới tính | độ phủ dữ liệu theo thời gian |
-| Khoảng trống thị trường VN | cột ngang | chai được nói nhiều nhưng chưa bán ở VN |
 
 **Tự vẽ SVG, không dùng thư viện biểu đồ nào.** Ba lý do, theo thứ tự quan
 trọng: báo cáo phải mở được khi offline (link CDN thì nửa năm sau là trang
@@ -621,10 +609,8 @@ khi nhìn bản dựng thật:
   nền sáng thì bậc nhạt lùi, nền tối thì bậc đậm mới lùi.
 - **Hình nào cũng có bảng số gập lại được.** Thang màu không bao giờ là cách
   duy nhất đọc một giá trị.
-- **Thiếu dữ liệu thì để TRỐNG kèm lý do, không vẽ bừa.** Hiện chưa ghép được
-  chai nào với namperfume nên hình “khoảng trống thị trường” cố tình bỏ trống:
-  không có phía đối chiếu thì xếp hạng chai nhiều vote rồi gọi đó là “khoảng
-  trống” là một câu khác hẳn.
+- **Thiếu dữ liệu thì để TRỐNG kèm lý do, không vẽ bừa.** Hình nào không đủ
+  dữ liệu sẽ hiện ô giải thích vì sao, thay vì vẽ một biểu đồ nói sai.
 
 ### Thêm chỉ số mới
 
@@ -881,7 +867,6 @@ perfume_intel/
   sources/             mỗi site một package
     base.py            SiteScraper: vòng lặp crawl dùng chung
     fragrantica/       models.py · parsers.py · scraper.py
-    namperfume/        models.py · parsers.py · scraper.py
   pipelines/
     crawl.py           crawl 1 danh sách URL / cả thư mục CSV, resume, đặt tên file
     mini.py            ghép des_url bản mini với dữ liệu đã crawl
@@ -930,7 +915,6 @@ python -m pytest tests/ -v     # nếu có cài pytest
 | File | Kiểm cái gì |
 |---|---|
 | `test_parsers.py` | Bóc tách HTML Fragrantica, đọc CSV đầu vào, retry/rate-limit |
-| `test_namperfume.py` | Bóc tách trang namperfume, xuất file |
 | `test_mini.py` | Ghép bản mini |
 | `test_brands.py` | Danh mục hãng: footer, mục lục A-Z, cắt section, retry, khử trùng |
 | `test_brand_products.py` | Sản phẩm của hãng: collection, `<template>`, retry, resume |
@@ -1011,24 +995,9 @@ Cả hai chức năng dùng chung một bộ giá trị, chuẩn hoá ở [commo
 | `men` (Fragrantica) | `Nam` |
 | `women` (Fragrantica) | `Nữ` |
 | `women and men` / `men and women` | `Unisex` |
-| `Nam` / `Nữ` / `Unisex` (namperfume `data-gender`) | giữ nguyên |
 
 Giá trị lạ được giữ nguyên văn thay vì bỏ trống, để còn nhìn thấy mà bổ sung vào
 `GENDER_MAP`.
-
-### namperfume.net
-
-- **Không cần render.** Đã so bản `requests` với bản Playwright trên 6 sản phẩm:
-  giống hệt nhau, kể cả khối Standard Size. Bật `--render` chỉ chậm hơn và còn
-  làm bẩn `name` (JS chèn thêm chữ "Nữ"/"Nam" vào `<h1>`).
-- **Thứ tự trong `data-variant-title` không cố định**: có sản phẩm ghi
-  `"90ml / Eau de Parfum"`, sản phẩm khác ghi `"Eau de Parfum/105ml"`. Parser
-  nhận phần khớp dạng số + `ml` là dung tích, phần còn lại là nồng độ — không
-  dựa vào vị trí.
-- Mỗi thuộc tính xuất hiện **2 lần** trong HTML (bản desktop và mobile), nên
-  `parse_attributes` chỉ giữ lần đầu.
-- `robots.txt` của namperfume chỉ chặn `/admin`, `/cart`, `/checkout`, `/search`...
-  Trang `/products/` được phép crawl. Fetcher tự tải robots.txt theo đúng tên miền.
 
 ## Lưu ý pháp lý
 

@@ -92,15 +92,6 @@ TABLES: dict[str, list[tuple[str, str]]] = {
         ("perfume_name", "VARCHAR"), ("collection", "VARCHAR"),
         ("year", "INTEGER"), ("gender", "VARCHAR"), ("comments", "BIGINT"),
     ],
-    # `market_key` là URL trang sản phẩm trên namperfume (khoá để ghép với
-    # `perfumes.des_key`). `des_key` ở bảng này là chuyện KHÁC: nó trỏ về trang
-    # sản phẩm tương ứng trên site của chính mình (yupi.vn), lấy từ cột đích
-    # trong file CSV đầu vào. Hai cột nhìn giống nhau nhưng không được hoán đổi.
-    "market": [
-        ("market_key", "VARCHAR"), ("url", "VARCHAR"), ("des_key", "VARCHAR"),
-        ("name", "VARCHAR"), ("brand", "VARCHAR"), ("price", "VARCHAR"),
-        ("scraped_at", "VARCHAR"),
-    ],
 }
 
 
@@ -179,12 +170,6 @@ def _brand_perfume_rows(records: dict[str, dict]) -> list[tuple]:
             for key, raw in records.items()]
 
 
-def _market_rows(records: dict[str, dict]) -> list[tuple]:
-    return [(key, raw.get("url"), url_key(raw.get("des_url")), raw.get("name"),
-             raw.get("brand"), raw.get("price"), raw.get("scraped_at"))
-            for key, raw in records.items()]
-
-
 # -------------------------------------------------------------------- xây bảng
 @dataclass
 class BuildReport:
@@ -204,8 +189,7 @@ def _create(con, name: str, rows: Sequence[tuple]) -> None:
         con.executemany(f'INSERT INTO "{name}" VALUES ({holes})', list(rows))
 
 
-def build(community: Path | None = None, market: Path | None = None,
-          out_dir: Path | None = None,
+def build(community: Path | None = None, out_dir: Path | None = None,
           database: str | None = None) -> BuildReport:
     """Đọc bronze -> ghi Parquet silver. Trả về số dòng mỗi bảng."""
     community = Path(community or config.raw_dir("fragrantica"))
@@ -220,13 +204,6 @@ def build(community: Path | None = None, market: Path | None = None,
     data = _perfume_rows(perfume_src)
     data["brands"] = _brand_rows(brand_src)
     data["brand_perfumes"] = _brand_perfume_rows(product_src)
-
-    if market is None:
-        default = config.raw_dir("namperfume")
-        market = default if default.exists() else None
-    market_src = (_latest(bronze.read(Path(market), bronze.PERFUME), "url")
-                  if market else {})
-    data["market"] = _market_rows(market_src)
 
     con = connect(database or ":memory:")
     try:

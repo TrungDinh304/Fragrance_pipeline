@@ -1,4 +1,4 @@
-.PHONY: help crawl brands products nam mini analyze similar silver marts queue daily test \
+.PHONY: help crawl brands products mini analyze similar silver marts queue daily test \
         docker-build docker-up docker-down docker-logs docker-test docker-queue
 
 PYTHON ?= python
@@ -8,7 +8,7 @@ CLI = $(PYTHON) -m perfume_intel
 #     make crawl data/inputs/fragrantica
 # Các từ đứng sau tên lệnh được biến thành target rỗng để make không báo lỗi.
 FIRST := $(firstword $(MAKECMDGOALS))
-ifneq ($(filter $(FIRST),crawl brands products nam mini analyze similar silver marts queue daily),)
+ifneq ($(filter $(FIRST),crawl brands products mini analyze similar silver marts queue daily),)
   ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
   .PHONY: $(ARGS)
   $(eval $(ARGS):;@:)
@@ -16,7 +16,6 @@ endif
 
 # Nguồn mặc định khi không truyền đường dẫn.
 FRAG_INPUT ?= data/inputs/fragrantica
-NAM_INPUT  ?= data/inputs/namperfume
 MINI_INPUT ?= data/inputs/temp_task/Mini.csv
 
 # make không cho truyền thẳng cờ '--recrawl'/'--resume' (nó hiểu là option của
@@ -33,7 +32,6 @@ help:
 	@echo "make crawl [path]    Crawl Fragrantica (--render) -> data/raw/fragrantica/"
 	@echo "make brands          Crawl danh muc hang (8000+)  -> data/raw/fragrantica/"
 	@echo "make products        Chai cua tung hang           -> data/raw/fragrantica/"
-	@echo "make nam   [path]    Crawl namperfume.net         -> data/raw/namperfume/"
 	@echo "make mini  [file]    Ghep ban mini voi du lieu da crawl (offline)"
 	@echo "make queue           Xem tien do crawl (so theo doi)"
 	@echo "make daily           Chay 1 lat ngan sach hom nay (nho giot)"
@@ -95,10 +93,6 @@ queue:
 daily:
 	$(CLI) daily --render $(if $(BUDGET),--budget $(BUDGET)) $(if $(BRANDS),--brands $(BRANDS)) $(if $(DELAY),--delay $(DELAY))
 
-# namperfume không cần render: dữ liệu có sẵn trong HTML.
-nam:
-	$(CLI) crawl --site namperfume $(if $(ARGS),$(ARGS),$(NAM_INPUT)) $(FLAGS)
-
 mini:
 	$(CLI) mini $(if $(ARGS),$(ARGS),$(MINI_INPUT)) $(FLAGS)
 
@@ -111,7 +105,6 @@ similar:
 
 test:
 	$(PYTHON) tests/test_parsers.py
-	$(PYTHON) tests/test_namperfume.py
 	$(PYTHON) tests/test_mini.py
 	$(PYTHON) tests/test_brands.py
 	$(PYTHON) tests/test_brand_products.py
