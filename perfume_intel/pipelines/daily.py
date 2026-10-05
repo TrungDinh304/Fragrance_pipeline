@@ -23,8 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
-from ..core import bronze
-from ..core import storage
+from ..core import bronze, lake, storage
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..sources.fragrantica.parsers import parse_brand_perfumes
 from ..sources.fragrantica.scraper import SITE, FragranticaScraper
@@ -125,6 +124,7 @@ def _fetch_products(fetcher: Fetcher, state: CrawlState, brand,
     if perfumes:
         path = out_dir / f"{output_stem('brand_products', SITE)}.jsonl"
         storage.save_jsonl(perfumes, path, append=True)
+        lake.seal(path)
 
     log.info("  mục lục %s: %d chai (%d mới)", brand.label, len(perfumes), added)
     return True
@@ -194,6 +194,11 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
     """Chạy một lát ngân sách. `scraper.fetcher` dùng cho cả mục lục lẫn chi tiết."""
     out_dir = out_dir or config.raw_dir(SITE, bronze.PERFUME)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dọn phần còn sót trước khi crawl thêm: lượt hôm qua có thể đã chết giữa một
+    # hãng (mất điện, Docker restart, SIGKILL) và để lại file chưa niêm. Một lần
+    # `list` thôi, nên gọi ở đây không tốn gì.
+    lake.seal_dir(out_dir)
 
     report = DailyReport(budget=budget)
 

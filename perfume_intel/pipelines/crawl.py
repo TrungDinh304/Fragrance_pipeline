@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core import csv_input, storage
+from ..core import csv_input, lake, storage
 from ..core.text import output_stem, url_key
 from ..sources.base import SiteScraper
 
@@ -52,6 +52,11 @@ def _brand_files(out_dir: Path, brand: str, site: str) -> list[Path]:
     Không đệ quy có chủ đích: file nằm trong thư mục con là dữ liệu đã lưu trữ,
     không phải nơi để ghi nối thêm.
     """
+    # Hàm này trả lời đúng câu hỏi của `--resume`: "hãng này đã có sẵn gì". Nên
+    # nó cũng là chỗ đúng để kéo lake về trước khi trả lời — thiếu bước này thì
+    # một container mới dựng sẽ không thấy gì và crawl lại từ đầu, dù dữ liệu
+    # đang nằm nguyên trên MinIO. `ensure_local` chỉ `list` một lần mỗi tiến trình.
+    lake.ensure_local(out_dir)
     pattern = f"{globlib.escape(brand)}_{globlib.escape(site)}_*.jsonl"
     return list(out_dir.glob(pattern))
 
@@ -112,13 +117,23 @@ def crawl_urls(scraper: SiteScraper, urls: list[str],
         if on_item is not None:
             on_item(record)
 
-    records = scraper.scrape_many(urls, skip=skip, on_item=_write,
-                                  des_urls=des_urls)
+    try:
+        records = scraper.scrape_many(urls, skip=skip, on_item=_write,
+                                      des_urls=des_urls)
+    finally:
+        # NIÊM TRONG `finally`, không phải sau khi xong êm đẹp. Hãng bị 429 ở
+        # chai thứ 300 vẫn phải đưa 299 chai kia lên lake — đó đúng là lúc mẻ
+        # crawl dễ mất dữ liệu nhất, vì `products` từng thoát bằng exit code 2 và
+        # để lại tất cả trong spool.
+        if opts.write_jsonl:
+            lake.seal(jsonl_path)
+
     if opts.write_csv:
         # Khi resume, CSV phải gồm cả bản ghi cũ trong JSONL, không chỉ phần mới.
         export = (storage.load_records(jsonl_path, scraper.record_cls)
                   if (opts.write_jsonl and opts.resume) else records)
         storage.save_csv(export, csv_path, columns=scraper.csv_columns)
+        lake.seal(csv_path)
 
     # Đếm đúng phần phải crawl thay vì `len(urls) - len(skip)`: file kết quả có
     # thể chứa URL không nằm trong danh sách lần này (vd CSV đầu vào bị cắt bớt),

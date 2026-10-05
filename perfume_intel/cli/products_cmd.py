@@ -11,8 +11,9 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 from ..core.bronze import BRAND_PERFUME
-from ..core import storage
+from ..core import lake, storage
 from ..pipelines.state import record_block
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..core.text import output_stem
@@ -47,7 +48,7 @@ def _brands_from(args) -> list[tuple[str, str | None]] | None:
     brands: list[tuple[str, str | None]] = [(u, None) for u in args.brand_urls]
 
     if args.from_brands:
-        if not args.from_brands.exists():
+        if not bronze.available(args.from_brands):
             log.error("Không tìm thấy file danh mục hãng: %s", args.from_brands)
             return None
         loaded = brand_products.load_brands(args.from_brands)
@@ -61,6 +62,17 @@ def _brands_from(args) -> list[tuple[str, str | None]] | None:
         log.error("Cần ít nhất 1 URL hãng, hoặc --from-brands <file.jsonl>.")
         return None
     return brands[: args.limit] if args.limit else brands
+
+
+def _write_csv(out_base, jsonl_path, report, write_jsonl: bool,
+               resume: bool) -> None:
+    """Ghi CSV rồi niêm lên lake."""
+    # Khi resume, CSV phải gồm cả phần cũ trong JSONL chứ không chỉ phần mới.
+    export = (storage.load_records(jsonl_path, BrandPerfume)
+              if (write_jsonl and resume) else report.perfumes)
+    csv_path = out_base.with_suffix(".csv")
+    storage.save_csv(export, csv_path, columns=BRAND_PERFUME_CSV_COLUMNS)
+    lake.seal(csv_path)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -101,13 +113,14 @@ def run(args: argparse.Namespace) -> int:
         return 130
     finally:
         fetcher.close()
+        # Niêm cả trên đường thoát vì 429 (return 2) và Ctrl-C (return 130). Mẻ
+        # `products` chạy 8.235 hãng và từng bị chặn ở hãng 361 — 360 hãng kia
+        # phải lên được lake, không nằm chờ trong spool.
+        if write_jsonl:
+            lake.seal(jsonl_path)
 
     if args.format in ("csv", "both"):
-        # Khi resume, CSV phải gồm cả phần cũ trong JSONL chứ không chỉ phần mới.
-        export = (storage.load_records(jsonl_path, BrandPerfume)
-                  if (write_jsonl and args.resume) else report.perfumes)
-        storage.save_csv(export, out_base.with_suffix(".csv"),
-                         columns=BRAND_PERFUME_CSV_COLUMNS)
+        _write_csv(out_base, jsonl_path, report, write_jsonl, args.resume)
 
     if not report.perfumes and not report.brands_skipped:
         log.error("Không lấy được chai nào.")

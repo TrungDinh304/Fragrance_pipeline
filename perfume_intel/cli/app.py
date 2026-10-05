@@ -9,13 +9,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import (analyze_cmd, brands_cmd, crawl_cmd, daily_cmd, links_cmd,
-               mini_cmd, products_cmd, queue_cmd, silver_cmd,
+from . import (analyze_cmd, brands_cmd, crawl_cmd, daily_cmd, lake_cmd,
+               links_cmd, mini_cmd, products_cmd, queue_cmd, silver_cmd,
                similar_cmd)
 from .options import setup_logging
 
 COMMANDS = (crawl_cmd, brands_cmd, products_cmd, links_cmd, mini_cmd,
-            analyze_cmd, similar_cmd, silver_cmd, queue_cmd, daily_cmd)
+            analyze_cmd, similar_cmd, silver_cmd, queue_cmd, daily_cmd,
+            lake_cmd)
 
 
 def build_parser() -> argparse.ArgumentParser:

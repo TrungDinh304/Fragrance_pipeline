@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 from ..analytics import dataset, report
 from ..analytics.metrics import METRICS
 
@@ -34,7 +35,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
 
 def run(args: argparse.Namespace) -> int:
     community = args.community or config.raw_dir("fragrantica")
-    if not community.exists():
+    if not bronze.available(community):
         log.error("Chưa có dữ liệu để phân tích: %s\n"
                   "Chạy `perfume-intel crawl <thư mục CSV>` trước.", community)
         return 1

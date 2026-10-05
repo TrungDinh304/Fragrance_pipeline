@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 from ..core import csv_input, storage
 from ..pipelines import mini
 from ..sources.fragrantica.models import CSV_COLUMNS, Perfume
@@ -42,7 +43,7 @@ def run(args: argparse.Namespace) -> int:
     if not args.path.exists():
         log.error("Không tìm thấy file CSV: %s", args.path)
         return 1
-    if not scan.exists():
+    if not bronze.available(scan):
         log.error("Không tìm thấy dữ liệu đã crawl: %s", scan)
         return 1
 

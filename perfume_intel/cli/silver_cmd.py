@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     community = args.community or config.raw_dir("fragrantica")
-    if not Path(community).exists():
+    if not bronze.available(Path(community)):
         log.error("Chưa có dữ liệu bronze: %s", community)
         return 1
 

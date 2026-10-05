@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 
 from .. import config
+from ..core import bronze
 from ..retrieval import (InMemoryRetriever, Query, Retriever, UnknownBrand,
                          UnknownPerfume, ports)
 
@@ -168,7 +169,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     community = args.community or config.raw_dir("fragrantica")
-    if not community.exists():
+    if not bronze.available(community):
         log.error("Chưa có dữ liệu: %s", community)
         return 1
 

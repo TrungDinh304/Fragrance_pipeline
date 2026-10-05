@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .. import config
-from ..core import bronze
+from ..core import bronze, lake
 from ..core.text import url_key
 
 log = logging.getLogger(__name__)
@@ -219,12 +219,20 @@ def build(community: Path | None = None, out_dir: Path | None = None,
     finally:
         con.close()
 
+    # Niêm sau khi đóng kết nối, không phải trong vòng lặp: DuckDB ghi Parquet
+    # theo từng khối và chỉ đóng footer khi COPY xong. Đọc file giữa lúc đó sẽ
+    # đưa lên lake một file Parquet thiếu footer — vẫn có kích thước, vẫn trông
+    # như xong, và chỉ hỏng ở lúc ai đó đọc nó.
+    lake.seal_dir(out_dir, lake.SILVER)
     return BuildReport(out_dir=out_dir, counts=counts)
 
 
 def read_silver(con, out_dir: Path | None = None) -> None:
     """Đăng ký mọi bảng Parquet thành view trong một kết nối DuckDB."""
     out_dir = Path(out_dir or config.SILVER_DIR)
+    # Máy này có thể chưa dựng silver mà lake đã có (máy khác dựng rồi). Kéo về
+    # trước khi kết luận là thiếu bảng.
+    lake.ensure_local(out_dir, lake.SILVER)
     for name in TABLES:
         path = out_dir / f"{name}.parquet"
         if path.exists():

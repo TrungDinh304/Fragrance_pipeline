@@ -113,6 +113,8 @@ test:
 	$(PYTHON) tests/test_analytics.py
 	$(PYTHON) tests/test_vectors.py
 	$(PYTHON) tests/test_retrieval.py
+	$(PYTHON) tests/test_objects.py
+	$(PYTHON) tests/test_lake.py
 	$(PYTHON) tests/test_charts.py
 	$(PYTHON) tests/test_bronze.py
 	$(PYTHON) tests/test_warehouse.py

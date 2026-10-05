@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from . import storage
+from . import lake, storage
 
 log = logging.getLogger(__name__)
 
@@ -114,7 +114,13 @@ class Scan:
 
 
 def scan(root: Path, kind: str) -> Scan:
-    """Đọc mọi bản ghi thuộc `kind` dưới `root`, đếm những gì đã bỏ qua."""
+    """Đọc mọi bản ghi thuộc `kind` dưới `root`, đếm những gì đã bỏ qua.
+
+    Đây là chỗ DUY NHẤT kéo dữ liệu từ lake về, đúng như luật trong
+    `docs/ARCHITECTURE.md` ("chỉ `core/bronze.py` đọc kho thô"). Khi lake tắt,
+    hoặc khi `root` nằm ngoài `data/raw/` (mọi test đều vậy), đây là một hàm rỗng.
+    """
+    lake.ensure_local(root)
     result = Scan(kind=kind)
     for path in iter_files(root, kind):
         result.files += 1
@@ -143,6 +149,25 @@ def log_scan(result: Scan, where: Path | str = "") -> None:
         log.warning("  %d dòng không có khoá chính nào (url / brand_url / "
                     "perfume_url) — bản ghi hỏng, không phải loại mới.",
                     result.unknown)
+
+
+def available(source: Path) -> bool:
+    """Có dữ liệu để đọc ở `source` không — hỏi CẢ lake, không chỉ ổ đĩa này.
+
+    VÌ SAO KHÔNG DÙNG THẲNG `Path.exists()`
+    Đã dính thật khi thử trên một máy sạch: mọi lệnh đọc đều kiểm
+    `community.exists()` TRƯỚC khi tới `scan()`, nên trên container vừa dựng nó
+    báo "Chưa có dữ liệu" rồi thoát — trong khi 125 file đang nằm nguyên trên
+    MinIO. Không một dòng lỗi nào sai, chỉ là trả lời câu khác.
+
+    Nhận cả thư mục lẫn file. File (vd `brands_fragrantica_021026.jsonl` mà
+    `make products` cần) thì đồng bộ thư mục chứa nó, vì lake làm việc theo
+    prefix chứ không theo từng object.
+    """
+    source = Path(source)
+    thu_muc = source if (source.is_dir() or not source.suffix) else source.parent
+    lake.ensure_local(thu_muc)
+    return source.exists()
 
 
 def read(root: Path, kind: str, quiet: bool = False) -> list[dict[str, Any]]:

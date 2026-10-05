@@ -28,7 +28,7 @@ WORKDIR /app
 # đây là thứ điều khiển một browser thật, nâng cấp nó nên là việc có chủ ý.
 COPY pyproject.toml README.md ./
 RUN mkdir -p perfume_intel && touch perfume_intel/__init__.py \
-    && pip install -e ".[render,warehouse,marts]" "playwright==1.57.0"
+    && pip install -e ".[render,warehouse,marts,lake]" "playwright==1.57.0"
 
 # Google Chrome THẬT, không phải Chromium đóng gói. Đây không phải sở thích: đo
 # trên 10 trang Fragrantica, Chromium của Playwright qua được 1/10 (9 lần

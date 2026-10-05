@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .. import config
 from ..core.bronze import BRAND
-from ..core import storage
+from ..core import lake, storage
 from ..pipelines.state import record_block
 from ..core.http import Blocked, Fetcher, RateLimited
 from ..core.text import output_stem
@@ -69,6 +69,9 @@ def run(args: argparse.Namespace) -> int:
     if args.format in ("csv", "both"):
         storage.save_csv(report.brands, out_base.with_suffix(".csv"),
                          columns=BRAND_CSV_COLUMNS)
+    # Danh mục hãng là đầu vào của `make products`; để nó chỉ nằm trên một máy
+    # thì máy khác chạy `products` với `--from-brands` rỗng.
+    lake.seal_base(out_base)
 
     with_letter = sum(1 for b in report.brands if b.alphabet)
     log.info("Tổng: %d hãng (%d có chữ cái, %d nằm trong Most Popular Brands).",

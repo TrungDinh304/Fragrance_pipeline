@@ -150,7 +150,7 @@ def _import_existing(state, folder: Path) -> int:
     Phân loại theo hình dạng bản ghi, không theo tên file: tên hãng có thể chứa
     dấu nháy và `&` nên không đáng tin làm khoá.
     """
-    if not folder.exists():
+    if not bronze.available(folder):
         log.error("Không tìm thấy thư mục: %s", folder)
         return 1
 
@@ -195,7 +195,7 @@ def run(args: argparse.Namespace) -> int:
     state = open_state(args.db)
 
     if args.seed:
-        if not args.seed.exists():
+        if not bronze.available(args.seed):
             log.error("Không tìm thấy file: %s", args.seed)
             return 1
         rows = list(storage.read_jsonl(args.seed))

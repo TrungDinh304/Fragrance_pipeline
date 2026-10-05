@@ -42,11 +42,16 @@ Không muốn cài gì lên máy thì dùng Docker — xem
 | `data/raw/<site>/` | Kết quả crawl, mỗi hãng một file `.jsonl` theo ngày |
 | `data/silver/` | Tầng silver: Parquet đã khử trùng, có kiểu |
 | `data/warehouse/` | Tầng gold: mart do dbt dựng (DuckDB) |
+| `data/state/` | Sổ tiến độ crawl (SQLite) — **luôn chỉ của máy này** |
 | `data/processed/` | Đầu ra của `analyze` và `mini` |
 | `data/scratch/` | File chạy thử lặt vặt, không ai đọc tới |
 | `.cache/html/` | HTML thô đã tải (rất nặng, xoá được bất cứ lúc nào) |
 
 Cả `data/` lẫn `.cache/` đều không commit.
+
+**Khi chạy bằng Docker Compose, `data/raw/` và `data/silver/` KHÔNG còn là bản
+gốc** — bản chính thức nằm trên MinIO, còn hai thư mục này tụt xuống thành spool
+ghi trước + cache đọc. Xem [Data lake trên MinIO](#data-lake-trên-minio).
 
 ## Lệnh make
 
@@ -367,17 +372,29 @@ Cách này thay cho Task Scheduler và không cần cài Python, Playwright hay 
 trên máy — ảnh đã có sẵn Google Chrome thật.
 
 ```bash
-cp .env.example .env          # sửa TZ / RUN_AT / BUDGET nếu cần
+cp .env.example .env          # sửa TZ / RUN_AT / BUDGET, ĐỔI MẬT KHẨU MinIO
 docker compose build
+docker compose up -d minio    # bật kho dữ liệu trước
+docker compose up minio-init  # tạo bucket + bật versioning (chạy một lần)
 docker compose up -d          # bật bộ lên lịch, chạy 02:30 hằng ngày
 
 docker compose logs -f scheduler        # xem nó đang làm gì
+docker compose run --rm cli lake status # bronze đang nằm ở đâu, lệch bao nhiêu
 docker compose run --rm cli queue       # tiến độ
 docker compose run --rm cli daily --render --budget 20   # chạy tay một lượt
 docker compose run --rm cli silver      # bronze -> Parquet
 docker compose run --rm marts           # dbt build -> bảng gold
-docker compose run --rm test            # toàn bộ test, không cần mạng
+docker compose run --rm test            # toàn bộ test, không cần mạng (lake tắt)
 docker compose down
+```
+
+Xem dữ liệu bằng mắt: <http://localhost:9001> (user/pass lấy từ `.env`).
+
+**Lần đầu, đưa kho đã crawl sẵn lên MinIO:**
+
+```bash
+docker compose run --rm cli lake push --dry-run   # xem sẽ niêm gì
+docker compose run --rm cli lake push             # niêm thật
 ```
 
 Muốn biết ngay là nó hoạt động, đừng chờ tới 02:30:
@@ -386,8 +403,9 @@ Muốn biết ngay là nó hoạt động, đừng chờ tới 02:30:
 RUN_ON_START=1 docker compose up   # chạy một lượt liền, để nguyên terminal mà xem
 ```
 
-Bốn service: `scheduler` (chạy nền, `restart: unless-stopped`), `cli` (chạy tay
-một lệnh bất kỳ), `marts` (dbt), `test`. Ba cái sau nằm trong profile `cli` nên
+Sáu service: `minio` (kho dữ liệu, chạy nền), `minio-init` (tạo bucket rồi thoát),
+`scheduler` (chạy nền, `restart: unless-stopped`), `cli` (chạy tay một lệnh bất
+kỳ), `marts` (dbt), `test`. Ba cái cuối nằm trong profile `cli` nên
 `docker compose up` không đụng tới.
 
 Vài điểm đã cân nhắc, để sau này không phải dò lại:
@@ -395,6 +413,16 @@ Vài điểm đã cân nhắc, để sau này không phải dò lại:
 - **`./data` và `./.cache` là bind mount, không phải named volume.** Trên máy này
   sổ theo dõi và dữ liệu đã crawl đang nằm ở `./data`; dùng named volume thì
   container khởi đầu trên một bản trống và crawl lại từ đầu.
+- **Riêng MinIO thì dùng named volume**, vì đó là định dạng nội bộ của nó, không
+  phải file để người ta mở. Trên Windows, bind mount đi qua WSL2 còn gây lỗi
+  quyền với user 1001 trong ảnh. Sao lưu không phải copy volume đó — chạy
+  `cli lake pull` là có lại toàn bộ bronze dưới dạng `.jsonl` trong `data/raw/`.
+- **Service `test` đặt `LAKE=off` và không kế thừa khoá MinIO.** Một bài test viết
+  sai đường dẫn không được phép ghi vào kho dữ liệu chính thức.
+- **Ảnh MinIO pin theo digest.** `minio/minio` trên Docker Hub đã không còn pull
+  được và `quay.io/minio/minio` đòi đăng nhập, nên compose dùng
+  `bitnamilegacy/minio` ghim bằng `sha256:...`. Đổi sang bản khác (hoặc sang AWS
+  S3 / Cloudflare R2) chỉ là đổi `S3_ENDPOINT` và khoá — code chỉ nói API S3.
 - **Ảnh có Google Chrome thật**, không phải Chromium đóng gói của Playwright —
   bản đóng gói bị Cloudflare chặn 9/10 trang (xem `core/browser.py:_launch_browser`).
   Nền là `python:3.13-slim-bookworm`, không phải ảnh của Playwright: ảnh đó kéo
@@ -415,6 +443,53 @@ Vài điểm đã cân nhắc, để sau này không phải dò lại:
 - **Mỗi lần chỉ nên có một tiến trình ghi sổ.** SQLite mở ở chế độ WAL và có
   `timeout=30` nên đọc chồng nhau thì ổn, nhưng hai lượt `daily` cùng lúc là tự
   tạo tranh chấp không cần thiết.
+
+### Data lake trên MinIO
+
+MinIO đóng vai trò **datalake**: bronze và silver nằm ở đó, không nằm trên ổ đĩa
+máy nào.
+
+```
+LAKE=off  (mặc định khi chạy tay)    LAKE=s3  (Docker Compose đặt sẵn)
+data/raw/  = BẢN GỐC                 s3://bronze/  = BẢN GỐC
+                                     data/raw/     = spool ghi trước + cache đọc
+```
+
+Xoá `data/raw/` sau khi đã niêm là an toàn; xoá bucket thì không.
+
+```bash
+perfume-intel lake status            # hai bên đang có gì, lệch chỗ nào
+perfume-intel lake push              # niêm mọi thứ local lên lake
+perfume-intel lake pull              # kéo lake về máy này
+perfume-intel lake init              # tạo bucket (Compose đã làm hộ)
+```
+
+Lúc chạy bình thường **không cần gọi tay**: crawl tự niêm sau mỗi hãng, và mọi
+lệnh đọc tự kéo về. Ba lúc cần dùng tay: di trú lần đầu, máy/container mới, và
+dọn phần còn sót sau một lượt crawl bị ngắt giữa hãng.
+
+Chạy CLI ngoài Docker mà vẫn muốn dùng lake:
+
+```bash
+export LAKE=s3 S3_ENDPOINT=http://localhost:9000
+export S3_ACCESS_KEY=perfume S3_SECRET_KEY=perfume-dev-only
+perfume-intel lake status
+```
+
+**Ba điều cần biết:**
+
+- **Spool là bắt buộc, không phải tạm bợ.** S3 không có `append`, mà crawler ghi
+  từng dòng ngay khi có — đó là lý do mẻ 10 ngày đứt mạng không mất dữ liệu. Nên
+  nó append local rồi *niêm* một lần mỗi hãng. Niêm cả khi bị 429: hãng bị chặn ở
+  chai thứ 300 vẫn đưa 299 chai kia lên lake.
+- **File dài hơn thì thắng.** Bronze chỉ ghi thêm, nên số byte là thước đo bên nào
+  có nhiều dữ liệu hơn. Local dài hơn (đang crawl dở) thì lake không ghi đè.
+- **Sổ tiến độ vẫn chỉ của máy này.** `data/state/crawl_state.db` là SQLite, không
+  chạy được trên S3. Nên **đừng crawl từ hai máy cùng lúc** — chúng sẽ làm trùng
+  việc và ghi đè file của nhau. Lake làm dữ liệu dùng chung được, không làm hàng
+  đợi dùng chung được.
+
+Chi tiết thiết kế và lý do: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### Sổ theo dõi
 

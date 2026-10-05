@@ -1,5 +1,6 @@
 """Cấu hình chung cho crawler."""
 
+import os
 from pathlib import Path
 
 BASE_URL = "https://www.fragrantica.com"
@@ -10,6 +11,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 #   data/inputs/<site>/*.csv     danh sách URL do người dùng cung cấp
 #   data/raw/<site>/*.jsonl      bản ghi crawl được, mỗi hãng một file theo ngày
 #   data/processed/              đầu ra của pipeline phân tích
+#
+# KHI LAKE BẬT (xem `core/lake.py`), `data/raw/` KHÔNG còn là bản gốc: nó là
+# spool ghi trước + cache đọc, còn bản chính thức nằm trên MinIO. Xoá nó sau khi
+# đã niêm là an toàn. `data/state/` thì vẫn luôn là bản gốc và chỉ của máy này —
+# SQLite không chạy được trên S3.
 DATA_DIR = PROJECT_ROOT / "data"
 INPUTS_DIR = DATA_DIR / "inputs"
 RAW_DIR = DATA_DIR / "raw"
@@ -27,6 +33,66 @@ WAREHOUSE_DB = WAREHOUSE_DIR / "perfume.duckdb"
 
 # Cache HTML thô: rất nặng, luôn nằm ngoài data/ và không commit.
 CACHE_DIR = PROJECT_ROOT / ".cache" / "html"
+
+
+# --- Data lake (MinIO / S3) -------------------------------------------------
+# Khi bật, MinIO là NƠI LƯU CHÍNH THỨC của bronze và silver; `data/raw/` tụt
+# xuống thành spool ghi trước + cache đọc. Xem `core/lake.py`.
+#
+# MẶC ĐỊNH TẮT, có chủ đích: bật mặc định nghĩa là mọi test và mọi lần chạy tay
+# đều đòi một MinIO đang sống. `docker-compose.yml` bật nó lên.
+#
+# Đọc qua HÀM chứ không phải hằng số module, vì hai lý do:
+#   - đổi biến môi trường có hiệu lực ngay, không phải reload module;
+#   - test đặt được env rồi gọi hàm, không phải vá thuộc tính module.
+LAKE_DEFAULT_BUCKET = {"bronze": "bronze", "silver": "silver"}
+
+
+def _env(name: str, default: str = "") -> str:
+    return (os.environ.get(name) or default).strip()
+
+
+def lake_kind() -> str:
+    """'off' (mặc định) hoặc 's3'. Giá trị lạ bị coi là 'off' và báo một dòng."""
+    kind = _env("LAKE", "off").lower()
+    if kind in ("", "off", "0", "false", "local", "file"):
+        return "off"
+    if kind in ("s3", "minio", "1", "true", "on"):
+        return "s3"
+    import logging
+    logging.getLogger(__name__).warning(
+        "LAKE=%r không hiểu được — coi như tắt. Chỉ nhận 'off' hoặc 's3'.", kind)
+    return "off"
+
+
+def lake_endpoint() -> str | None:
+    """None = S3 thật của AWS. Với MinIO thì bắt buộc có, vd http://minio:9000."""
+    return _env("S3_ENDPOINT") or None
+
+
+def lake_access_key() -> str | None:
+    return _env("S3_ACCESS_KEY") or None
+
+
+def lake_secret_key() -> str | None:
+    return _env("S3_SECRET_KEY") or None
+
+
+def lake_region() -> str:
+    return _env("S3_REGION", "us-east-1")
+
+
+def lake_bucket(layer: str) -> str:
+    """Hai bucket riêng, không phải hai prefix trong một bucket.
+
+    Vì hai tầng có GIÁ TRỊ khác nhau, nên phải đặt được chính sách khác nhau:
+    bronze là thứ duy nhất không dựng lại được (phải crawl lại nhiều ngày) nên
+    bật versioning và không bao giờ hết hạn; silver xoá đi dựng lại trong vài
+    giây. Chung một bucket thì không tách được hai chính sách đó.
+    """
+    if layer not in LAKE_DEFAULT_BUCKET:
+        raise ValueError(f"Tầng không có: {layer!r}")
+    return _env(f"{layer.upper()}_BUCKET", LAKE_DEFAULT_BUCKET[layer])
 
 # --- Vòng đời cache -------------------------------------------------------
 # Hai loại dữ liệu, hai tuổi thọ khác nhau:
