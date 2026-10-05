@@ -40,6 +40,21 @@ x-lake-env: &lake-env
   BRONZE_BUCKET: ${BRONZE_BUCKET:-bronze}
   SILVER_BUCKET: ${SILVER_BUCKET:-silver}
 
+# Kho vector + cổng gọi LLM. Tách khối riêng vì chỉ `api` và `cli` cần.
+x-ai-env: &ai-env
+  PG_DSN: postgresql://${PG_USER:-perfume}:${PG_PASSWORD:-perfume-dev-only}@postgres:5432/${PG_DB:-perfume}
+  EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+  # 9router chạy trên MÁY HOST, không trong mạng compose. `host.docker.internal`
+  # là cách container gọi ra host trên Docker Desktop.
+  #
+  # TÊN BIẾN LÀ `COMPOSE_LLM_BASE_URL`, cố ý không phải `LLM_BASE_URL` — y hệt lý
+  # do với S3_ENDPOINT: trên host thì endpoint là http://localhost:20128/v1, còn
+  # trong container `localhost` trỏ vào chính container. Một kho, hai địa chỉ, nên
+  # phải là hai tên biến.
+  LLM_BASE_URL: ${COMPOSE_LLM_BASE_URL:-http://host.docker.internal:20128/v1}
+  LLM_MODEL: ${LLM_MODEL:-kr/claude-haiku-4.5}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+
 services:
   # --- data lake ---------------------------------------------------------------
   # MinIO nói đúng API S3, nên `core/objects.py` không có một dòng nào riêng cho
@@ -109,6 +124,32 @@ services:
       BRONZE_BUCKET: ${BRONZE_BUCKET:-bronze}
       SILVER_BUCKET: ${SILVER_BUCKET:-silver}
     restart: "no"
+
+  # --- kho vector -------------------------------------------------------------
+  # Postgres + pgvector. Ghim theo digest, cùng lý do như ảnh MinIO.
+  #
+  # Đây là kho PHỤC VỤ, không phải nguồn sự thật: nó chỉ NẠP từ
+  # data/silver/perfume_embeddings.parquet. Nên dùng named volume là đủ — xoá đi
+  # nạp lại bằng `cli vectordb load` trong vài giây.
+  postgres:
+    image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    container_name: perfume-intel-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      POSTGRES_USER: ${PG_USER:-perfume}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-perfume-dev-only}
+      POSTGRES_DB: ${PG_DB:-perfume}
+    ports:
+      - "${PG_PORT:-5433}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-perfume} -d ${PG_DB:-perfume}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
   # --- chạy nền: nhỏ giọt mỗi ngày --------------------------------------------
   scheduler:
     <<: *app
@@ -145,9 +186,13 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      <<: *lake-env
+      <<: [*lake-env, *ai-env]
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # --- dựng bảng gold bằng dbt ------------------------------------------------
   #   docker compose run --rm marts            (mặc định: build = chạy + test)
@@ -170,6 +215,41 @@ services:
       # biến lake để `silver` chạy trong service này kéo được bản mới về.
       <<: *lake-env
 
+  # --- API + trang test chatbot -----------------------------------------------
+  #   docker compose up -d api   ->  http://localhost:8000
+  #
+  # KHÔNG nằm trong profile `cli`: đây là service chạy nền như `scheduler`, và
+  # `docker compose up` nên bật nó lên cùng.
+  api:
+    <<: *app
+    container_name: perfume-intel-api
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "uvicorn"]
+    command: ["perfume_intel.api.app:create_app", "--factory",
+              "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      <<: [*lake-env, *ai-env]
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    # 9router chạy trên host. Trên Docker Desktop thì `host.docker.internal` có
+    # sẵn; trên Docker Engine Linux thì phải khai thêm dòng dưới, nên để sẵn cho
+    # cả hai chạy được mà không phải sửa file.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 40s
+
   # --- toàn bộ test, không cần mạng -------------------------------------------
   #   docker compose run --rm test
   test:
@@ -188,6 +268,9 @@ services:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
 
 volumes:
+  # Kho vector. Dựng lại được từ Parquet nên không cần sao lưu.
+  pg-data:
+
   # Dữ liệu nội bộ của MinIO. Không sửa tay; muốn xem dữ liệu thì mở console ở
   # http://localhost:9001, muốn lấy ra thì `docker compose run --rm cli lake pull`.
   minio-data:

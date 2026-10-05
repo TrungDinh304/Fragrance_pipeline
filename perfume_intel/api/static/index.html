@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>perfume-intel — thử chatbot</title>
+<style>
+  :root {
+    --nen: #faf9f7; --the: #ffffff; --vien: #e5e0d8;
+    --chu: #1c1a17; --chu-nhat: #6b6459; --chu-mo: #9a9287;
+    --nhan: #8a6a3b; --nhan-nhat: #f2ece1;
+    --do: #a8432c; --xanh: #3f6b4a;
+    --rong: 1180px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --nen: #16150f; --the: #1f1d17; --vien: #342f25;
+      --chu: #f0ece4; --chu-nhat: #b3aa9c; --chu-mo: #807867;
+      --nhan: #d8b277; --nhan-nhat: #2a2418;
+      --do: #e08a72; --xanh: #8fc3a0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --nen: #16150f; --the: #1f1d17; --vien: #342f25;
+    --chu: #f0ece4; --chu-nhat: #b3aa9c; --chu-mo: #807867;
+    --nhan: #d8b277; --nhan-nhat: #2a2418;
+    --do: #e08a72; --xanh: #8fc3a0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--nen); color: var(--chu);
+    font: 15px/1.6 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .bao { max-width: var(--rong); margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .phu { color: var(--chu-nhat); font-size: 13px; margin: 0 0 20px; }
+  .trang-thai {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;
+    font-size: 12px;
+  }
+  .chip {
+    background: var(--the); border: 1px solid var(--vien);
+    border-radius: 999px; padding: 4px 11px; color: var(--chu-nhat);
+  }
+  .chip b { color: var(--chu); font-weight: 600; }
+  .chip.canh { border-color: var(--do); color: var(--do); }
+  form { display: flex; gap: 8px; margin-bottom: 10px; }
+  input[type=text] {
+    flex: 1; padding: 11px 14px; font: inherit; color: var(--chu);
+    background: var(--the); border: 1px solid var(--vien); border-radius: 10px;
+  }
+  input[type=text]:focus { outline: 2px solid var(--nhan); outline-offset: -1px; }
+  button {
+    padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--nhan); color: #fff; border: 0; border-radius: 10px;
+  }
+  button:disabled { opacity: .5; cursor: progress; }
+  .vd { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+  .vd button {
+    background: transparent; color: var(--chu-nhat); font-weight: 400;
+    border: 1px solid var(--vien); padding: 5px 10px; font-size: 12.5px;
+    border-radius: 999px;
+  }
+  .cot { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 860px) { .cot { grid-template-columns: 1fr; } }
+  .o {
+    background: var(--the); border: 1px solid var(--vien);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .o > h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--chu-mo); margin: 0 0 12px; font-weight: 600;
+  }
+  .tra-loi { font-size: 15.5px; white-space: pre-wrap; }
+  .nghi {
+    margin-top: 12px; padding: 9px 12px; border-radius: 8px;
+    background: var(--nhan-nhat); border-left: 3px solid var(--do);
+    color: var(--do); font-size: 13px;
+  }
+  ol { margin: 0; padding-left: 0; list-style: none; counter-reset: x; }
+  ol li {
+    counter-increment: x; padding: 10px 0 10px 30px; position: relative;
+    border-top: 1px solid var(--vien);
+  }
+  ol li:first-child { border-top: 0; padding-top: 0; }
+  ol li::before {
+    content: counter(x); position: absolute; left: 0; top: 10px;
+    width: 20px; height: 20px; border-radius: 50%; font-size: 11px;
+    display: grid; place-items: center; font-weight: 600;
+    background: var(--nhan-nhat); color: var(--nhan);
+  }
+  ol li:first-child::before { top: 0; }
+  .ten { font-weight: 600; }
+  .ten a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--vien); }
+  .hang { color: var(--chu-nhat); font-size: 12.5px; margin-top: 2px; }
+  .vi { color: var(--chu-mo); font-size: 12px; margin-top: 3px; }
+  .y-dinh { font-size: 12.5px; color: var(--chu-nhat); }
+  .y-dinh code {
+    background: var(--nhan-nhat); color: var(--nhan); padding: 1px 6px;
+    border-radius: 5px; font-size: 11.5px;
+  }
+  .trong { color: var(--chu-mo); font-style: italic; }
+  footer { margin-top: 28px; font-size: 12px; color: var(--chu-mo); }
+</style>
+</head>
+<body>
+<div class="bao">
+  <h1>perfume-intel — thử chatbot</h1>
+  <p class="phu">
+    Hỏi bằng tiếng Việt. Câu trả lời do model viết, nhưng nó
+    <b>chỉ được dùng</b> danh sách bên phải — nên hai bên luôn hiện cạnh nhau để
+    đối chiếu.
+  </p>
+
+  <div class="trang-thai" id="trang-thai"></div>
+
+  <form id="form">
+    <input type="text" id="cau" autocomplete="off"
+           placeholder="ví dụ: mùi gỗ ấm cho buổi tối mùa đông">
+    <button id="gui">Hỏi</button>
+  </form>
+  <div class="vd" id="vd"></div>
+
+  <div class="cot">
+    <div class="o">
+      <h2>Câu trả lời</h2>
+      <div class="tra-loi" id="tra-loi"><span class="trong">Chưa hỏi gì.</span></div>
+      <div id="nghi"></div>
+      <div style="margin-top:14px" class="y-dinh" id="y-dinh"></div>
+    </div>
+    <div class="o">
+      <h2>Dữ liệu retriever trả về</h2>
+      <ol id="ds"><li><span class="trong">Chưa có.</span></li></ol>
+    </div>
+  </div>
+
+  <footer id="chan"></footer>
+</div>
+
+<script>
+const VI_DU = [
+  "mùi gỗ ấm cho buổi tối mùa đông",
+  "nước hoa tươi mát đi biển mùa hè",
+  "chai nào có oud mà nhiều người đánh giá",
+  "mui hoa nhe nhang cho nu",
+  "nước hoa vanilla ngọt cho nữ dùng ban ngày",
+];
+
+const $ = (id) => document.getElementById(id);
+
+function chip(nhan, gt, canh) {
+  const d = document.createElement("span");
+  d.className = "chip" + (canh ? " canh" : "");
+  d.innerHTML = nhan + " <b>" + gt + "</b>";
+  return d;
+}
+
+async function nap() {
+  try {
+    const r = await fetch("/health");
+    const d = await r.json();
+    const o = $("trang-thai");
+    o.innerHTML = "";
+    o.append(chip("retriever", d.retriever));
+    o.append(chip("chai", d.perfumes));
+    o.append(d.llm.configured
+      ? chip("model", d.llm.model)
+      : chip("model", "CHƯA CÓ KHOÁ — chỉ ghép câu sẵn", true));
+    $("chan").textContent = "lake: " + d.lake;
+  } catch (e) {
+    $("trang-thai").append(chip("API", "không gọi được: " + e.message, true));
+  }
+}
+
+function veDanhSach(ms) {
+  const ol = $("ds");
+  ol.innerHTML = "";
+  if (!ms.length) {
+    ol.innerHTML = '<li><span class="trong">Không có chai nào.</span></li>';
+    return;
+  }
+  for (const m of ms) {
+    const li = document.createElement("li");
+    const ten = document.createElement("div");
+    ten.className = "ten";
+    ten.textContent = m.name || "(không tên)";
+    if (m.url) {
+      const a = document.createElement("a");
+      a.href = m.url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = m.name || "(không tên)";
+      ten.textContent = ""; ten.append(a);
+    }
+    li.append(ten);
+    const phan = [];
+    if (m.brand) phan.push(m.brand);
+    if (m.rating != null) phan.push(m.rating.toFixed(2) + "★");
+    if (m.rating_count) phan.push(m.rating_count.toLocaleString("vi-VN") + " vote");
+    if (m.gender) phan.push(m.gender);
+    phan.push("khớp " + m.score.toFixed(3));
+    const h = document.createElement("div");
+    h.className = "hang"; h.textContent = phan.join(" · ");
+    li.append(h);
+    if (m.why && m.why.length) {
+      const v = document.createElement("div");
+      v.className = "vi";
+      v.textContent = "vì: " + m.why
+        .map((w) => w.block + " " + w.label).join(", ");
+      li.append(v);
+    }
+    ol.append(li);
+  }
+}
+
+function veYDinh(d) {
+  const p = [];
+  const them = (nhan, gt) => {
+    if (gt && gt.length) p.push(nhan + ": " + [].concat(gt)
+      .map((x) => "<code>" + x + "</code>").join(" "));
+  };
+  them("note", d.intent.notes);
+  them("accord", d.intent.accords);
+  them("dịp", d.intent.occasions);
+  if (d.intent.gender) them("giới tính", [d.intent.gender]);
+  if (d.unknown && d.unknown.length) them("không hiểu", d.unknown);
+  const rs = Object.entries(d.resolved || {});
+  if (rs.length) p.push("hiểu thành: " + rs
+    .map(([k, v]) => "<code>" + k + " → " + v + "</code>").join(" "));
+  if (!d.llm) p.push("<i>chưa cấu hình khoá model — câu trả lời ghép sẵn, ý định tách bằng từ khoá</i>");
+  $("y-dinh").innerHTML = p.length ? "Ý định đã tách — " + p.join(" · ") : "";
+}
+
+async function hoi(cau) {
+  $("gui").disabled = true;
+  $("tra-loi").innerHTML = '<span class="trong">Đang hỏi…</span>';
+  $("nghi").innerHTML = "";
+  try {
+    const r = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: cau, limit: 5 }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status + " " + (await r.text()).slice(0, 200));
+    const d = await r.json();
+    $("tra-loi").textContent = d.answer;
+    veDanhSach(d.matches || []);
+    veYDinh(d);
+    if (d.suspicious && d.suspicious.length) {
+      $("nghi").innerHTML = '<div class="nghi">Câu trả lời nhắc tên không có '
+        + "trong danh sách: <b>" + d.suspicious.join(", ") + "</b>. "
+        + "Đây là lớp soát tự động — hãy đối chiếu với danh sách bên phải.</div>";
+    }
+  } catch (e) {
+    $("tra-loi").innerHTML = '<span style="color:var(--do)">Lỗi: '
+      + e.message + "</span>";
+  } finally {
+    $("gui").disabled = false;
+  }
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const c = $("cau").value.trim();
+  if (c) hoi(c);
+});
+
+for (const v of VI_DU) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = v;
+  b.onclick = () => { $("cau").value = v; hoi(v); };
+  $("vd").append(b);
+}
+
+nap();
+</script>
+</body>
+</html>

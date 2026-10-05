@@ -29,6 +29,15 @@ marts = ["dbt-duckdb>=1.9", "duckdb>=1.0"]
 # môi trường. Cố ý không dùng SDK riêng của MinIO: một dòng `import minio` sẽ neo
 # project vào một nhà cung cấp ở ngay tầng thấp nhất.
 lake = ["boto3>=1.34"]
+# Embedding chay local qua ONNX (~250 MB) chu KHONG qua torch (~2,5 GB). Cung
+# model, cung chat luong, anh nho hon 10 lan. CANH BAO: tren Windows onnxruntime
+# thuong loi `DLL load failed` vi thieu Visual C++ Redistributable — dung
+# container cho phan nay.
+embed = ["fastembed>=0.4", "numpy>=1.26"]
+# Kho vector: Postgres + pgvector. psycopg 3, khong keo theo gi nang.
+vectordb = ["psycopg[binary]>=3.1"]
+# API + trang test chatbot.
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

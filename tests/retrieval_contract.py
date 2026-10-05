@@ -105,6 +105,39 @@ def check_bao_lai_ten_da_duoc_khop(make: Make) -> None:
     assert any("agarwood" in v for v in res.resolved.values()), res.resolved
 
 
+def check_tim_bang_cau_tu_do(make: Make) -> None:
+    """Hỏi bằng một câu tiếng Việt, không gõ đúng tên note.
+
+    Đây là cách chatbot hỏi. Mỗi backend làm theo cách riêng (khớp từ khoá, hay
+    vector ngữ nghĩa) và chất lượng khác nhau — hợp đồng chỉ đòi: có trả về kết
+    quả, và nói ra đã hiểu câu đó thành gì.
+    """
+    r = make(rows())
+    res = r.search(Query(text="nước hoa mùi oud gỗ ấm", limit=3))
+    assert res.matches, "hỏi bằng câu tự do mà không ra gì"
+    assert res.resolved or res.unknown, \
+        "không báo lại đã hiểu câu tự do thành gì — người hỏi không biết hệ " \
+        "thống đã trả lời câu nào"
+
+
+def check_cau_tu_do_khong_khop_gi_thi_bao_lai(make: Make) -> None:
+    """Câu không liên quan gì tới nước hoa phải được báo, không im lặng trả bừa."""
+    res = make(rows()).search(Query(text="xyzzy qwerty khongcotu", limit=3))
+    assert res.unknown or not res.matches, \
+        "câu không khớp gì mà vẫn trả về kết quả và không báo gì"
+
+
+def check_cau_tu_do_van_ton_trong_bo_loc(make: Make) -> None:
+    """Nhánh câu tự do là nhánh THỨ BA, rất dễ quên áp bộ lọc — y như nhánh
+    `like_perfume` từng quên lọc giới tính."""
+    res = make(rows()).search(Query(text="musk oud", gender="Nữ", limit=9))
+    assert all(m.gender == "Nữ" for m in res.matches), \
+        f"lọt chai khác giới tính: {[(m.name, m.gender) for m in res.matches]}"
+    res = make(rows()).search(Query(text="musk oud", min_votes=100, limit=9))
+    assert all((m.rating_count or 0) >= 100 for m in res.matches), \
+        "lọt chai dưới ngưỡng vote ở nhánh câu tự do"
+
+
 def check_hoan_canh_sai_bi_bao(make: Make) -> None:
     res = make(rows()).search(Query(occasions=("thu-ba",), limit=3))
     assert "thu-ba" in res.unknown

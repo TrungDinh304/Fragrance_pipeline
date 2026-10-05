@@ -1,19 +1,116 @@
 # perfume-intel
 
 Thu thập dữ liệu nước hoa rồi phân tích thị trường dựa trên **tín hiệu cộng
-đồng** (rating, vote accord, vote mùa, độ lưu/toả hương) từ
-[fragrantica.com](https://www.fragrantica.com/), đối chiếu với giá và độ phủ
+đồng** (rating, vote accord, vote mùa, độ lưu hương / toả hương) từ
+[fragrantica.com](https://www.fragrantica.com/).
 
-Hai nửa tách rời nhau:
+Hai nửa tách rời nhau, và chỗ nối là **bronze**:
 
 ```
-data/inputs/   →  crawl   →  data/raw/   →  analyze  →  data/processed/
-(CSV link)        (mạng)     (.jsonl)       (offline)   (CSV + summary.json)
+    CHẠM MẠNG  (nhỏ giọt)          │           CHẠY OFFLINE
+  ─────────────────────────────────┼──────────────────────────────────────────
+                                   │
+   crawl · brands                  │   ┌─▶ silver ─▶ gold      Parquet, rồi
+   products · daily ──▶ ┌────────┐ │   │   (Parquet)  (dbt)    5 mart DuckDB
+                        │ BRONZE │─────┼─▶ analyze             CSV + report.html
+   ngân sách/hàng đợi   │ MinIO  │ │   │   (analytics/)
+   SQLite, local ──────▶│  (S3)  │ │   │
+                        └────────┘ │   └─▶ similar              chai/hãng giống
+                                   │       (vectors+retrieval)   nhau, kèm lý do
 ```
 
-Crawl chậm và phụ thuộc mạng nên chỉ chạy khi cần dữ liệu mới; phân tích chạy
-hoàn toàn offline trên `data/raw/`, sửa công thức rồi chạy lại bao nhiêu lần
-cũng được.
+Ba nhánh đọc đều bắt từ **bronze**, không nhánh nào phụ thuộc nhánh khác. `analyze`
+cố ý **không** đi qua silver/gold: nó là bên đối chứng độc lập cho dbt — hai đường
+tính ra lệch nhau thì có test đỏ.
+
+Crawl chậm và phụ thuộc mạng nên chỉ chạy khi cần dữ liệu mới. Mọi thứ phía sau
+bronze chạy **hoàn toàn offline**, sửa công thức rồi chạy lại bao nhiêu lần cũng
+được — đó là lý do bronze được giữ nguyên trạng và không bao giờ bị sửa.
+
+## Techstack
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ỨNG DỤNG    cli/ (13 lệnh)  ·  api/ FastAPI  ·  trang test chatbot      │
+│                llm/  9router — tách ý định + diễn đạt  ◄── CỔNG 5        │
+└────────┬─────────────────────────────────────────────────────────────────┘
+         │ phụ thuộc:  retrieval/ports.py          ◄── CỔNG 4
+┌────────▼─────────────────────────────────────────────────────────────────┐
+│  TRUY XUẤT    retrieval/pgvector_store.py   Postgres + pgvector          │
+│                retrieval/memory.py          in-memory (đối chứng)        │
+│                embedding/  ONNX local, 384 chiều  ◄── CỔNG 6             │
+│                vectors/    khối thưa, cho phần 'vì sao'                  │
+│                                                                          │
+│  PHÂN TÍCH    analytics/   Python thuần · SVG tự sinh                    │
+│  GOLD         transform/   dbt + DuckDB · 5 mart · 17 kiểm tra           │
+│  SILVER       warehouse/   Parquet có kiểu  +  embedding Parquet         │
+└────────┬─────────────────────────────────────────────────────────────────┘
+         │ phụ thuộc:  core/bronze.py             ◄── CỔNG 3
+┌────────▼─────────────────────────────────────────────────────────────────┐
+│  BRONZE       MinIO / S3 · JSONL thô · chỉ ghi thêm · versioning         │
+│                core/lake.py      spool · niêm · kéo về                   │
+│                core/objects.py   LocalStore | S3Store  ◄── CỔNG 2        │
+└────────▲─────────────────────────────────────────────────────────────────┘
+         │ ghi:  append từng dòng, niêm sau mỗi hãng
+┌────────┴─────────────────────────────────────────────────────────────────┐
+│  THU THẬP     sources/   SiteScraper            ◄── CỔNG 1               │
+│                core/http      requests + throttle + cache                │
+│                core/browser   Playwright + Chrome THẬT                   │
+│                pipelines/state.py   SQLite — hàng đợi, LUÔN local        │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Sáu cổng** là chỗ được phép thay ruột mà phía trên không phải sửa:
+
+| | Cổng | Thay được gì | Canh bằng |
+|---|---|---|---|
+| 1 | `sources/base.py` `SiteScraper` | thêm site mới | `test_parsers.py` · `test_resume_cache.py` |
+| 2 | `core/objects.py` `ObjectStore` | MinIO → AWS/R2/SeaweedFS | **hợp đồng 19 điều khoản**, chạy cho cả 2 adapter |
+| 3 | `core/bronze.py` | bố cục kho thô, đĩa ↔ S3 | `test_bronze.py` · `test_lake.py` |
+| 4 | `retrieval/ports.py` `Retriever` | in-memory ↔ pgvector | **hợp đồng 26 điều khoản**, chạy cho cả 2 adapter |
+| 5 | `llm/ports.py` `ChatModel` | 9router → OpenAI/Ollama/bất kỳ | tự xuống cấp được khi mất model |
+| 6 | `embedding/ports.py` `Embedder` | ONNX local → API nào khác | **hợp đồng 11 điều khoản** + bộ đo chất lượng riêng |
+
+Hai thứ **không** đi qua cổng, có chủ đích: `pipelines/state.py` (SQLite, luôn
+local) và `transform/` (dbt tự là một ranh giới). `vectors/` cũng không — nó là
+chi tiết cài đặt nằm sau cổng 4.
+
+Luật đi lại đầy đủ và lý do từng quyết định:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### Chọn gì, và vì sao chọn được lâu
+
+| Lớp | Công nghệ | Lý do bền |
+|---|---|---|
+| Thu thập | `requests` + **Playwright với Chrome thật** | Chromium đóng gói bị Cloudflare chặn 9/10 trang từ cùng IP ⇒ chặn là theo *dấu vân tay*, không theo IP |
+| Hàng đợi / ngân sách | **SQLite** (WAL) | một file, đọc được sau hàng chục năm, không cần server |
+| Kho đối tượng | **API S3** qua `boto3` | MinIO hôm nay, AWS/R2/Wasabi sau này — cùng một đoạn code, chỉ đổi biến môi trường |
+| Bronze | **JSONL** theo entity | ghi thêm được, không khoá schema, đọc được bằng mắt |
+| Silver | **Parquet** | chuẩn mở có kiểu; DuckDB/pandas/Polars/Spark/Trino đều đọc |
+| Gold | **dbt** + **DuckDB** | dbt là chuẩn ngành; đổi DuckDB → Postgres chỉ là đổi adapter |
+| Truy xuất | **cổng + adapter**, vector thưa có IDF | giải thích được *vì sao giống* — thứ embedding đặc không cho |
+| Biểu đồ | **SVG tự sinh** | không CDN, không JS ⇒ mở được offline sau nhiều năm |
+| Embedding | **ONNX** (fastembed), KHÔNG torch | cùng model, ~250 MB thay vì ~2,5 GB |
+| Kho vector | **Postgres + pgvector** | mọi phép tính trong SQL; đã có Postgres thì không thêm hạ tầng |
+| Gọi AI | **9router** (endpoint kiểu OpenAI) | gộp 40+ nhà cung cấp; đổi sang API trực tiếp chỉ là đổi env |
+| Đóng gói | **Docker Compose** | 8 service, một lệnh bật |
+| Test | **stdlib**, không framework | `python tests/test_x.py` chạy được ở mọi nơi; pytest là tuỳ chọn |
+
+### Thứ cố ý CHƯA có
+
+| | Khi nào làm |
+|---|---|
+| Hội thoại nhiều lượt (nhớ ngữ cảnh) | khi trang test thành sản phẩm thật |
+| Tìm kiếm trộn (hybrid: thưa + đặc) | khi thấy câu hỏi có note cụ thể bị trả lời kém |
+| State store dùng chung (Postgres) | khi muốn nhiều máy crawl song song |
+| Xác thực / giới hạn tần suất cho API | khi API ra khỏi máy cá nhân |
+
+Embedding, API, và vector DB **đã có** — chúng rời khỏi danh sách này khi trang
+chatbot trở thành người dùng thật đầu tiên. Đó đúng là cách danh sách này nên hoạt
+động: điều kiện kích hoạt đến thì làm, không làm trước.
+
+Danh sách này nằm trong repo có chủ đích: để lần sau không ai phải đoán "có nên
+thêm vector DB không" — điều kiện kích hoạt đã ghi sẵn kèm số đo hiện tại.
 
 ## Cài đặt
 
@@ -21,18 +118,30 @@ cũng được.
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e .
+```
 
-# Chỉ cần nếu muốn lấy "when to wear", độ lưu hương, độ toả hương (cờ --render):
-pip install -e ".[render]"
-python -m playwright install chromium
+Bản lõi chỉ có `requests` + `beautifulsoup4` + `lxml` — crawl và phân tích đã
+chạy được. Phần nặng tách thành **extra**, cài thêm khi cần:
+
+| Extra | Kéo theo | Mở ra cái gì |
+|---|---|---|
+| `render` | `playwright` | cờ `--render`: when-to-wear, độ lưu hương, độ toả hương |
+| `warehouse` | `duckdb` (~22 MB, không phụ thuộc gì) | tầng silver (Parquet) + hỏi bằng SQL |
+| `marts` | `dbt-duckdb` (~35 gói) | tầng gold: 5 mart có kiểm thử |
+| `lake` | `boto3` | bronze/silver trên MinIO hoặc S3 |
+
+```powershell
+pip install -e ".[render]"            # rồi: python -m playwright install chromium
+pip install -e ".[render,warehouse,marts,lake]"   # tất cả
 ```
 
 Cài xong có lệnh `perfume-intel`. Không muốn cài thì chạy thẳng
 `python -m perfume_intel ...` — hai cách tương đương, tài liệu dưới đây dùng
 cách thứ hai.
 
-Không muốn cài gì lên máy thì dùng Docker — xem
-[Chạy trong Docker](#chạy-trong-docker). Ảnh đã có sẵn Google Chrome thật.
+**Không muốn cài gì lên máy thì dùng Docker** — xem
+[Chạy trong Docker](#chạy-trong-docker). Ảnh đã có sẵn Google Chrome thật, đủ
+extra, kèm MinIO làm datalake.
 
 ## Bố cục dữ liệu
 
@@ -57,16 +166,36 @@ ghi trước + cache đọc. Xem [Data lake trên MinIO](#data-lake-trên-minio)
 
 ```powershell
 make help                            # xem nhanh các lệnh
-make crawl                           # crawl data/inputs/fragrantica -> data/raw/fragrantica
+
+# --- chạm mạng (nhỏ giọt) ---
+make brands                          # danh mục hãng A-Z  (~12 request)
+make products                        # mục lục chai của từng hãng
+make crawl                           # crawl data/inputs/fragrantica
 make crawl data/inputs/fragrantica   # chỉ định thư mục khác
-make mini                            # ghép bản mini (offline)
-make brands                          # danh mục hãng -> data/raw/fragrantica/
-make products                        # chai của từng hãng -> data/raw/fragrantica/
-make queue                           # xem tiến độ crawl
-make daily                           # chạy 1 lát ngân sách (nhỏ giọt)
-make analyze                         # phân tích -> data/processed/<ngày>/
-make test                            # toàn bộ test, không cần mạng
+make daily                           # chạy 1 lát ngân sách
+make queue                           # xem tiến độ, không ra mạng
+
+# --- offline ---
+make silver                          # bronze -> Parquet          [warehouse]
+make marts                           # dbt build -> 5 mart        [marts]
+make analyze                         # chỉ số + report.html -> data/processed/<ngày>/
+make similar Angham                  # chai nào giống chai này
+make similar NOTES="oud,vanilla"     # chai nào nhiều note này nhất
+make mini                            # ghép bản mini
+make test                            # 16 bộ · 291 test · không cần mạng
+make lake                            # datalake: hai bên đang có gì  [lake]
+
+# --- Docker ---
+make docker-init                     # lần đầu: bật MinIO + tạo bucket
+make docker-up                       # bật MinIO + bộ lên lịch
+make docker-logs                     # xem bộ lên lịch đang làm gì
+make docker-queue                    # tiến độ trong container
+make docker-down
 ```
+
+`make lake` chỉ xem. Ba việc còn lại (`push` / `pull` / `init`) gọi thẳng bằng CLI
+vì chúng dùng theo tình huống chứ không theo thói quen — xem
+[Data lake trên MinIO](#data-lake-trên-minio).
 
 `make` không cho truyền thẳng cờ `--recrawl`/`--resume` (nó hiểu là option của
 chính `make`), nên dùng biến:
@@ -307,7 +436,7 @@ Công thức hiệu chỉnh Bayes viết lại bằng SQL rất dễ lệch ở 
 `rating > 0`, mà lệch kiểu đó không làm hỏng gì — chỉ làm bảng xếp hạng sai một
 cách rất thuyết phục.
 
-### Ba cái bẫy đã gặp, ghi lại để khỏi gặp lại
+### Bốn cái bẫy đã gặp, ghi lại để khỏi gặp lại
 
 - **dbt đọc YAML bằng encoding của hệ điều hành.** Trên Windows là cp1252 nên nó
   chết ngay ở dòng tiếng Việt đầu tiên trong `dbt_project.yml`. `make marts` đặt
@@ -315,6 +444,15 @@ cách rất thuyết phục.
 - **Thư mục `target/` của dbt không được nằm trong `data/`.** Nó chứa cache parse
   theo đường dẫn tuyệt đối; để trong bind mount thì container đọc nhầm cache của
   host rồi chết với `KeyError: dbt_duckdb://macros/catalog.sql`.
+- **…và cũng không được đóng vào ảnh Docker.** Cùng một lỗi, quay lại bằng đường
+  khác: `target/` đã ra khỏi `data/` nhưng vẫn nằm trong build context, nên bị
+  `COPY` vào ảnh kèm đường dẫn của máy dựng. `docker compose run --rm marts` chết
+  với `KeyError: dbt_duckdb://macros/columns.sql`. `.dockerignore` giờ loại
+  `transform/target/` và `transform/logs/`.
+- **`PASS=24` ở dòng cuối KHÔNG phải số test.** Đó là tổng số node: 5 mart + 2
+  view + **17 test**. Đọc nhầm con số đó một lần rồi, và nó đã nằm sai trong tài
+  liệu suốt mấy tuần. Muốn số test thì đọc dòng `Finished running ... 17 data
+  tests`, hoặc `dbt ls --resource-type test`.
 
 ### Có cần tới mức này không
 
@@ -376,7 +514,9 @@ cp .env.example .env          # sửa TZ / RUN_AT / BUDGET, ĐỔI MẬT KHẨU 
 docker compose build
 docker compose up -d minio    # bật kho dữ liệu trước
 docker compose up minio-init  # tạo bucket + bật versioning (chạy một lần)
-docker compose up -d          # bật bộ lên lịch, chạy 02:30 hằng ngày
+docker compose up -d          # bật bộ lên lịch, chạy theo RUN_AT
+
+# hoặc gọn hơn: make docker-build && make docker-init && make docker-up
 
 docker compose logs -f scheduler        # xem nó đang làm gì
 docker compose run --rm cli lake status # bronze đang nằm ở đâu, lệch bao nhiêu
@@ -490,6 +630,73 @@ perfume-intel lake status
   đợi dùng chung được.
 
 Chi tiết thiết kế và lý do: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### Chatbot: hỏi bằng tiếng Việt (`api` + `embed` + `vectordb`)
+
+```bash
+make docker-init                    # lần đầu: MinIO + bucket
+docker compose run --rm cli embed       # bronze -> embedding Parquet (~50s)
+docker compose run --rm cli vectordb load   # Parquet -> Postgres + pgvector
+make api                            # -> http://localhost:8000
+```
+
+Trang test hiện **câu trả lời và dữ liệu gốc cạnh nhau**, vì câu trả lời do model
+viết còn danh sách là của retriever — có đối chiếu được thì mới tin được.
+
+#### Một lượt chat đi qua những đâu
+
+```
+"mùi gỗ trầm ấm cho buổi tối mùa đông"
+   │  llm/intent.py    9router đề xuất note/accord/dịp, TỪ VỰNG quyết định
+   │                   (nhãn model bịa ra bị bỏ) + viết lại câu CÓ DẤU
+   ▼
+Query(occasions=[winter, night], text="...")
+   │  retrieval/pgvector_store.py   vector đặc 384 chiều, dịp làm bộ lọc
+   │                                lý do lấy từ bảng thưa bằng một câu join
+   ▼
+5 chai + "vì: oud, amber, woody"
+   │  llm/advise.py    model CHỈ được dùng danh sách này; verify() soát lại
+   ▼
+câu tư vấn  +  danh sách gốc hiện cạnh nhau
+```
+
+#### Ba lớp chặn model bịa
+
+| | Lớp | Chặn được gì |
+|---|---|---|
+| 1 | prompt nói rõ chỉ dùng danh sách | yếu nhất, nhưng rẻ |
+| 2 | `advise.verify()` soát tên trong câu trả lời | **tên chai không có trong kết quả** — lớp tự động duy nhất |
+| 3 | giao diện luôn hiện danh sách gốc | mọi thứ còn lại, bằng mắt người đọc |
+
+Lớp 2 không chặn được mọi kiểu bịa (model vẫn có thể nói sai về một chai CÓ trong
+danh sách), nhưng nó chặn kiểu tệ nhất: giới thiệu một chai không tồn tại. Tên bịa
+trông y hệt tên thật nên không ai soát được bằng mắt.
+
+#### Thiếu khoá thì vẫn dùng được
+
+Không có `LLM_API_KEY` thì trang vẫn chạy: ý định tách bằng từ khoá, câu trả lời
+ghép bằng Python. Khô hơn nhưng **đúng tuyệt đối**, và nó nói rõ đang thiếu gì.
+Tương tự, mất Postgres thì rơi về retriever in-memory.
+
+`/v1/models` của 9router không đòi khoá nhưng `/v1/chat/completions` thì có — nên
+endpoint trả 200 **không** có nghĩa là đã đủ cấu hình.
+
+#### Đổi model embedding = sinh lại toàn bộ
+
+Vector của hai model vẫn cộng trừ được với nhau, chỉ là kết quả vô nghĩa — và
+không có cách nào phát hiện từ con số. Nên `model_id` đi kèm mọi vector và bị kiểm
+ở cả hai chỗ (lúc đọc Parquet và lúc hỏi Postgres). Đổi `EMBED_MODEL` thì chạy lại
+`cli embed` rồi `cli vectordb load`; bảng tự dựng lại khi số chiều đổi.
+
+#### API
+
+| | |
+|---|---|
+| `GET /` | trang test chatbot |
+| `GET /health` | retriever nào đang dùng, bao nhiêu chai, có khoá LLM chưa |
+| `POST /chat` | `{message}` → câu tư vấn + danh sách + ý định đã tách |
+| `POST /search` | tra cứu thuần, không qua LLM |
+| `GET /vocabulary/{block}` | nhãn dùng được: `note`, `accord`, `occasion`... |
 
 ### Sổ theo dõi
 
@@ -935,13 +1142,17 @@ perfume_intel/
     daily_cmd.py       lệnh daily (chạy theo lịch)
     analyze_cmd.py     lệnh analyze
     similar_cmd.py     lệnh similar (chai/hãng giống nhau)
+    silver_cmd.py      lệnh silver (bronze -> Parquet)
+    lake_cmd.py        lệnh lake (status / init / push / pull)
   core/                hạ tầng, KHÔNG biết gì về site cụ thể
     http.py            session + throttle + retry/backoff + cache đĩa + robots
     browser.py         bản Fetcher chạy bằng Playwright (cho --render)
     csv_input.py       đọc link từ CSV/text của người dùng (đoán dấu phân cách...)
     storage.py         đọc & ghi JSONL / CSV
     text.py            chuẩn hoá giới tính, tên file kết quả, khoá so khớp URL
-    bronze.py          phân loại bản ghi + quét kho thô theo từng loại
+    bronze.py          CỔNG ĐỌC kho thô: phân loại bản ghi, quét theo từng loại
+    objects.py         CỔNG kho đối tượng: LocalStore + S3Store (boto3)
+    lake.py            spool ghi trước · niêm sau mỗi hãng · kéo về khi đọc
   sources/             mỗi site một package
     base.py            SiteScraper: vòng lặp crawl dùng chung
     fragrantica/       models.py · parsers.py · scraper.py
@@ -957,7 +1168,7 @@ perfume_intel/
     metrics.py         Row -> các bảng chỉ số (hàm thuần, test được)
     report.py          chạy chỉ số rồi ghi ra data/processed/
     svg.py             viên gạch SVG (thang đo, màu, thoát XML) — không thư viện
-    charts.py          Row -> 6 Figure (hình + bảng số + chú giải + cảnh báo)
+    charts.py          Row -> 5 Figure (hình + bảng số + chú giải + cảnh báo)
     html_report.py     ghép Figure thành report.html tự chứa
   warehouse/           kho phân tích (cần extra [warehouse])
     silver.py          bronze -> Parquet khử trùng, có kiểu, trải phẳng
@@ -968,27 +1179,42 @@ perfume_intel/
     ports.py           Query/Match/Reason/Retriever (không nói gì về cài đặt)
     memory.py          adapter #1: in-memory, bọc vectors/
 transform/             dự án dbt: staging + 5 mart + test (extra [marts])
+docs/ARCHITECTURE.md   ranh giới giữa các lớp + lý do từng quyết định
+docker-compose.yml     6 service: minio · minio-init · scheduler · cli · marts · test
+Dockerfile             python:3.13-slim + Google Chrome thật
+scripts/docker/scheduler.sh   vòng lặp lên lịch trong container
 scripts/demo.py        xem nhanh tháp hương của vài chai
 scripts/migrate_bronze.py  dọn kho thô về bố cục mỗi loại một thư mục
 tests/                 test offline trên HTML thật đã lưu
+  objectstore_contract.py  hợp đồng ObjectStore — 19 điều khoản
+  retrieval_contract.py    hợp đồng Retriever — 23 điều khoản
 ```
 
-Ba quy tắc giữ cho cấu trúc này không rối lại:
+Năm quy tắc giữ cho cấu trúc này không rối lại:
 
 1. **`core/` không được import từ `sources/`.** Hạ tầng không biết đang crawl
    site nào; mọi thứ riêng của site (selector, tên miền, JS chờ render) là tham
    số truyền vào.
-2. **`analytics/` không đụng tới mạng.** Nó chỉ đọc `.jsonl` đã có, nên chạy lại
+2. **`analytics/` không đụng tới mạng.** Nó chỉ đọc bronze đã có, nên chạy lại
    bao nhiêu lần cũng được.
-3. **Thêm site mới = thêm một package trong `sources/`**: `models.py` (dataclass
+3. **`cli/` không được import `vectors/`.** Truy xuất phải đi qua
+   `retrieval/ports.py`. Có một test quét `cli/*.py` canh đúng điều này.
+4. **Kiểm "có dữ liệu chưa" bằng `bronze.available()`, không bằng
+   `Path.exists()`.** `exists()` chỉ thấy ổ đĩa này; trên máy mới nó báo "chưa có
+   dữ liệu" trong khi MinIO có đủ. Cũng có test canh.
+5. **Thêm site mới = thêm một package trong `sources/`**: `models.py` (dataclass
    có `to_dict`/`to_flat_dict`/`from_dict`), `parsers.py`, và một lớp con của
    `SiteScraper`. Đăng ký vào `SCRAPERS` trong `cli/crawl_cmd.py` là xong —
    không phải sửa pipeline.
 
+Quy tắc 3 và 4 đều có test canh, không chỉ có chữ. Lý do: cả hai là loại lỗi
+**không làm đỏ bất cứ test nào khác** — nó chỉ làm phía trên dần dần phụ thuộc
+vào ruột, hoặc làm một máy mới báo sai là chưa có dữ liệu.
+
 ## Test
 
 ```powershell
-make test                      # cả 4 bộ
+make test                      # 16 bộ · 291 test
 python tests\test_parsers.py   # hoặc từng bộ một
 python -m pytest tests/ -v     # nếu có cài pytest
 ```
@@ -996,15 +1222,44 @@ python -m pytest tests/ -v     # nếu có cài pytest
 | File | Kiểm cái gì |
 |---|---|
 | `test_parsers.py` | Bóc tách HTML Fragrantica, đọc CSV đầu vào, retry/rate-limit |
-| `test_mini.py` | Ghép bản mini |
 | `test_brands.py` | Danh mục hãng: footer, mục lục A-Z, cắt section, retry, khử trùng |
 | `test_brand_products.py` | Sản phẩm của hãng: collection, `<template>`, retry, resume |
+| `test_resume_cache.py` | `--resume` khớp khoá hai phía, TTL cache, ổ đầy không giết crawl |
 | `test_schedule.py` | Sổ theo dõi, ngân sách, chia hãng lớn nhiều ngày, ngắt mạch |
+| `test_bronze.py` | Phân loại bản ghi theo hình dạng, bố cục kho thô, di trú |
+| `test_objects.py` | **Hợp đồng `ObjectStore`** — chạy cho cả `LocalStore` và MinIO thật |
+| `test_lake.py` | Niêm/kéo về, luật "file dài hơn thắng", mất MinIO giữa mẻ crawl |
+| `test_embedding.py` | **Hợp đồng `Embedder`** + cách viết tài liệu + đo chất lượng trên dữ liệu thật |
+| `test_pgvector.py` | **Hợp đồng `Retriever` trên pgvector** + canh "tính toán nằm trong SQL, không trong RAM" |
 | `test_analytics.py` | Nạp dữ liệu, các chỉ số, xuất báo cáo |
+| `test_charts.py` | Thang đo, màu, chú giải, cảnh báo khi dữ liệu mỏng |
+| `test_vectors.py` | Vector thưa: IDF, chuẩn hoá từng khối, chân dung hãng |
+| `test_retrieval.py` | **Hợp đồng `Retriever`** (in-memory) + canh `cli/` không import `vectors/` |
+| `test_warehouse.py` | Silver khử trùng đúng; mart dbt khớp với `metrics.py` |
+| `test_mini.py` | Ghép bản mini |
 
 Test chạy trên file HTML thật đã lưu ở `tests/fixtures/`, **không cần mạng**.
 Khi Fragrantica đổi giao diện, test sẽ đỏ và chỉ ra selector nào trong
 `parsers.py` cần sửa — hãy tải lại fixture mới rồi chỉnh selector.
+
+**Ba bộ hợp đồng** (`test_objects.py`, `test_retrieval.py`, `test_embedding.py`)
+không kiểm một bản cài đặt cụ thể mà kiểm **mọi** bản cài đặt. Thêm backend mới (DuckDB, pgvector,
+R2) thì viết adapter rồi thêm một dòng; qua hết hợp đồng là thay thế được và
+không ai phía trên phải sửa.
+
+Phần hợp đồng `ObjectStore` chạy với MinIO thật khi có; không có thì **bỏ qua kèm
+lý do**, không báo lỗi — `make test` phải xanh được khi không có hạ tầng, nếu
+không người ta sẽ học cách phớt lờ màu đỏ.
+
+```powershell
+docker compose up -d minio
+$env:S3_ENDPOINT="http://localhost:9000"; $env:S3_ACCESS_KEY="perfume"
+$env:S3_SECRET_KEY="perfume-dev-only"; python tests\test_objects.py
+```
+
+**Chuẩn kiểm chứng của project là mutation test**, không phải độ phủ: sửa code cho
+sai rồi xem test có đỏ không. Test không đỏ nghĩa là nó không canh gì — và một
+test như vậy còn tệ hơn không có test, vì nó trông y hệt như đang bảo vệ cái gì đó.
 
 ## Ghi chú kỹ thuật
 

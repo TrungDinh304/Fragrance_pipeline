@@ -21,3 +21,10 @@ venv/
 
 # tests/fixtures/ KHÔNG bị loại: service `test` chạy offline nhờ đúng mấy file
 # đó. Bỏ chúng là container build xong nhưng không test được gì.
+
+# dbt sinh `target/` (cache parse) và `logs/` theo ĐƯỜNG DẪN TUYỆT ĐỐI của máy
+# dựng. Để chúng vào image thì container đọc cache của host rồi chết với
+# `KeyError: dbt_duckdb://macros/columns.sql` — đúng cái bẫy đã gặp một lần khi
+# target/ còn nằm trong data/, chỉ là quay lại bằng đường khác.
+transform/target/
+transform/logs/

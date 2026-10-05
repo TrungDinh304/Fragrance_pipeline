@@ -37,6 +37,22 @@ _BLOCK_IN = {features.ACCORD: ports.ACCORD, features.NOTE: ports.NOTE,
              features.STRENGTH: ports.STRENGTH, features.FAMILY: ports.FAMILY}
 _BLOCK_OUT = {v: k for k, v in _BLOCK_IN.items()}
 
+# Hoàn cảnh nói bằng tiếng Việt -> trục mà dữ liệu cộng đồng thật sự có. Đây KHÔNG
+# phải từ điển note (đã bỏ khỏi phạm vi): chỉ sáu trục, và sáu trục này là tên cột
+# trong dữ liệu chứ không phải thứ suy diễn.
+_HOAN_CANH_VI = {
+    "mùa đông": "winter", "mùa xuân": "spring", "mùa hè": "summer",
+    "mùa thu": "fall", "ban ngày": "day", "buổi tối": "night",
+    "ban đêm": "night", "buổi sáng": "day",
+}
+
+# Từ nối tiếng Việt: không phải note, cũng không đáng báo là "không hiểu".
+_TU_BO_QUA = {
+    "nước", "hoa", "mùi", "chai", "cho", "của", "và", "với", "có", "nào",
+    "gì", "một", "những", "các", "thì", "là", "đi", "dùng", "hợp", "phù",
+    "tìm", "muốn", "cần", "thơm", "loại", "kiểu", "hơi", "rất", "khá",
+}
+
 
 def _reasons(pairs: Iterable[tuple[str, float]]) -> tuple[Reason, ...]:
     out = []
@@ -90,7 +106,9 @@ class InMemoryRetriever:
 
         if query.like_perfume:
             return self._search_like(query)
-        return self._search_terms(query)
+        if query.notes or query.accords or query.occasions:
+            return self._search_terms(query)
+        return self._search_text(query)
 
     def _search_like(self, q: Query) -> SearchResult:
         position = self._index.find(q.like_perfume)
@@ -107,6 +125,56 @@ class InMemoryRetriever:
             seed=self._match(position, 1.0),
             ambiguous=tuple(self._match(i, 1.0) for i in others[:5])
             if len(others) > 1 else ())
+
+    # ------------------------------------------------------------ câu tự do
+    def _tach_tu(self, text: str) -> tuple[list[str], list[str], list[str]]:
+        """Câu tiếng Việt -> (note/accord tìm được, hoàn cảnh, từ không hiểu).
+
+        Bản này khớp theo TỪ KHOÁ, không có ngữ nghĩa: "mùi gỗ" sẽ không tự tìm ra
+        `woody`. Đó là giới hạn thật của adapter in-memory, và cũng chính là lý do
+        `PgVectorRetriever` tồn tại — nó khớp bằng vector nên hiểu được câu không
+        chứa đúng tên note.
+
+        Vẫn làm phần này tử tế thay vì trả rỗng, vì nó là đường chạy khi chưa
+        dựng kho vector, và vì hợp đồng đòi mọi adapter phải xử lý được `text`.
+        """
+        import re
+        tu = [t for t in re.findall(r"[0-9a-zA-ZÀ-ỹ]+", text.lower())
+              if len(t) > 1]
+        hoan_canh = [t for t in tu if t in ports.OCCASIONS]
+        hoan_canh += [en for vi, en in _HOAN_CANH_VI.items() if vi in text.lower()]
+
+        tim_duoc: list[str] = []
+        khong_hieu: list[str] = []
+        for t in tu:
+            if t in ports.OCCASIONS or t in _TU_BO_QUA:
+                continue
+            found, _missing, _renamed = self._index.resolve(features.NOTE, [t])
+            if not found:
+                found, _m, _r = self._index.resolve(features.ACCORD, [t])
+            if found:
+                tim_duoc += found
+            else:
+                khong_hieu.append(t)
+        return tim_duoc, list(dict.fromkeys(hoan_canh)), khong_hieu
+
+    def _search_text(self, q: Query) -> SearchResult:
+        terms, axes, khong_hieu = self._tach_tu(q.text or "")
+        vector = features.query_from_terms(terms, occasion=axes,
+                                           idf=self._index.idf)
+        if not vector:
+            return SearchResult(unknown=tuple(khong_hieu))
+        hits = self._index.query(vector, limit=q.limit, gender=q.gender,
+                                 min_votes=q.min_votes, explain=q.explain)
+        return SearchResult(
+            matches=tuple(self._match_of(h.row, h.score, _reasons(h.why))
+                          for h in hits),
+            # Báo lại ĐÃ HIỂU câu đó thành gì — nếu không, người hỏi nhận một
+            # danh sách trông hợp lý mà không biết nó trả lời câu nào.
+            resolved={q.text or "": ", ".join(
+                [t.partition(":")[2] for t in terms] + axes)} if terms or axes
+            else {},
+            unknown=tuple(khong_hieu))
 
     def _search_terms(self, q: Query) -> SearchResult:
         terms: list[str] = []

@@ -85,6 +85,14 @@ class Query:
     notes: tuple[str, ...] = ()
     accords: tuple[str, ...] = ()
     occasions: tuple[str, ...] = ()
+    # Câu tự do, bằng ngôn ngữ người dùng: "mùi gỗ ấm cho buổi tối mùa đông".
+    #
+    # Cố ý KHÔNG nói gì về cách cài đặt. Bản trong bộ nhớ khớp theo từ khoá, bản
+    # pgvector khớp theo vector ngữ nghĩa — hai chất lượng khác nhau, nhưng cùng
+    # một hợp đồng: trả về chai liên quan, và BÁO LẠI đã hiểu câu đó ra sao
+    # (`SearchResult.resolved`). Thiếu phần báo lại thì người hỏi không bao giờ
+    # biết hệ thống đã trả lời câu khác.
+    text: str | None = None
     gender: str | None = None
     min_votes: int = 0
     include_same_brand: bool = True
@@ -94,7 +102,7 @@ class Query:
     @property
     def empty(self) -> bool:
         return not (self.like_perfume or self.notes or self.accords
-                    or self.occasions)
+                    or self.occasions or (self.text or "").strip())
 
 
 @dataclass(frozen=True)

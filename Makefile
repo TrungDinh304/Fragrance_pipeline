@@ -41,9 +41,15 @@ help:
 	@echo "make marts           Dung bang gold bang dbt (can dbt-duckdb)"
 	@echo "make test            Chay toan bo test (khong can mang)"
 	@echo ""
+	@echo "make lake            Xem datalake (MinIO): hai ben dang co gi"
+	@echo "make embed           Sinh embedding -> data/silver/*.parquet"
+	@echo "make vectordb        Xem/nap kho vector (Postgres + pgvector)"
+	@echo "make api             Bat API + trang test chatbot (localhost:8000)"
+	@echo ""
 	@echo "Docker (khong can cai Python/Chrome tren may):"
 	@echo "make docker-build    Build anh (co Google Chrome that ben trong)"
-	@echo "make docker-up       Bat bo len lich chay nen (02:30 hang ngay)"
+	@echo "make docker-init     Bat MinIO + tao bucket (chay mot lan dau tien)"
+	@echo "make docker-up       Bat MinIO + bo len lich chay nen (gio theo RUN_AT)"
 	@echo "make docker-logs     Xem bo len lich dang lam gi"
 	@echo "make docker-queue    Xem tien do trong container"
 	@echo "make docker-test     Chay toan bo test trong container"
@@ -115,6 +121,8 @@ test:
 	$(PYTHON) tests/test_retrieval.py
 	$(PYTHON) tests/test_objects.py
 	$(PYTHON) tests/test_lake.py
+	$(PYTHON) tests/test_embedding.py
+	$(PYTHON) tests/test_pgvector.py
 	$(PYTHON) tests/test_charts.py
 	$(PYTHON) tests/test_bronze.py
 	$(PYTHON) tests/test_warehouse.py
@@ -123,8 +131,30 @@ test:
 # Wrapper mong cho docker compose; xem README muc "Chay trong Docker".
 COMPOSE ?= docker compose
 
+# Xem datalake. push/pull/init goi thang bang CLI vi chung dung theo tinh huong.
+lake:
+	$(CLI) lake $(if $(ARGS),$(ARGS),status)
+
+# --- Tang vector + chatbot ---------------------------------------------------
+# embed can model ONNX; tren Windows thuong loi DLL nen chay trong container.
+embed:
+	$(CLI) embed $(if $(ARGS),$(ARGS),)
+
+vectordb:
+	$(CLI) vectordb $(if $(ARGS),$(ARGS),status)
+
+# Bat ca kho vector + API + trang test chatbot.
+api:
+	$(COMPOSE) up -d postgres api
+	@echo "Trang test chatbot: http://localhost:8000"
+
 docker-build:
 	$(COMPOSE) build
+
+# Chay mot lan dau tien: bat MinIO roi tao bucket + bat versioning cho bronze.
+docker-init:
+	$(COMPOSE) up -d minio
+	$(COMPOSE) up minio-init
 
 docker-up:
 	$(COMPOSE) up -d

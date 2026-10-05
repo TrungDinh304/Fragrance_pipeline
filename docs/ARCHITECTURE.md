@@ -53,17 +53,20 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
                  │ transform/ (dbt)                    ▲
   ┌──────────────▼───────────────┐                     │ bộ đối chứng
   │ GOLD   data/warehouse/*.duckdb├─────────────────────┘
-  │ 5 mart · 24 kiểm tra          │
+  │ 5 mart · 17 kiểm tra          │
   └───────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────────────┐
   │ TRUY XUẤT   retrieval/ports.py   ◄── CỔNG                      │
-  │             retrieval/memory.py  (adapter #1, in-memory)       │
+  │             retrieval/memory.py        adapter in-memory       │
+  │             retrieval/pgvector_store.py  Postgres + pgvector   │
+  │             embedding/   ◄── CỔNG (ONNX local, 384 chiều)      │
   │             vectors/ (chi tiết cài đặt, KHÔNG ai ngoài gọi)    │
   └─────────────────────────────┬──────────────────────────────────┘
                                 │ chỉ nhìn thấy ports
   ┌─────────────────────────────▼──────────────────────────────────┐
-  │ ỨNG DỤNG    cli/  ·  (sau này) api/  ·  (sau này) chatbot/     │
+  │ ỨNG DỤNG    cli/  ·  api/ (FastAPI + trang test chatbot)       │
+  │             llm/   ◄── CỔNG (9router, endpoint kiểu OpenAI)    │
   └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,6 +80,9 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
 | Kiểm "có dữ liệu chưa" bằng `bronze.available()`, **không** bằng `Path.exists()` | `exists()` chỉ thấy ổ đĩa này; trên máy mới nó báo "chưa có dữ liệu" trong khi lake có đủ |
 | Chỉ `core/lake.py` biết tới `core/objects.py` | tầng trên không được biết bronze nằm trên file hay trên S3 |
 | `cli/` **không** import `vectors/` | truy xuất phải đi qua cổng — có test canh |
+| `api/` chỉ nhìn thấy `Retriever` / `ChatModel` / `Embedder` | đổi backend nào cũng không phải sửa tầng API |
+| Đầu ra của LLM là **dữ liệu**, không phải lệnh | nhãn model bịa ra bị lọc qua `vocabulary()`; tên chai bịa ra bị `advise.verify()` soát |
+| `model_id` đi kèm MỌI vector | vector hai model vẫn cộng trừ được với nhau nhưng vô nghĩa, và không phát hiện được từ con số |
 | dbt đọc **silver**, không đọc bronze | khử trùng và đặt kiểu đã xong và đã có test |
 | `analytics/metrics.py` là hàm thuần | làm bộ đối chứng cho dbt (`tests/test_warehouse.py`) |
 
@@ -90,7 +96,10 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
 | Bronze | JSONL theo entity | ghi thêm được, không khoá schema |
 | Silver | **Parquet** | chuẩn mở có kiểu; DuckDB/pandas/Polars/Spark/Trino đều đọc |
 | Gold | **dbt** + DuckDB | dbt là chuẩn ngành; đổi DuckDB → Postgres chỉ là đổi adapter |
-| Truy xuất | **cổng + adapter** | xem bên dưới |
+| Truy xuất | **cổng + adapter**; thưa (IDF) + đặc (embedding) | thưa giải thích được *vì sao giống*, đặc hiểu được câu tự do — giữ cả hai |
+| Embedding | **ONNX** (fastembed), KHÔNG torch | cùng model, ~250 MB thay vì ~2,5 GB |
+| Kho vector | **Postgres + pgvector** | mọi phép tính trong SQL, không nạp vào RAM |
+| Gọi AI | **9router** (endpoint kiểu OpenAI) | gộp 40+ nhà cung cấp; đổi sang API trực tiếp chỉ là đổi env |
 | Biểu đồ | SVG tự sinh | không CDN ⇒ mở được offline sau nhiều năm |
 
 ## Data lake (MinIO / S3)
@@ -205,16 +214,17 @@ thay thế được, dù chạy đúng tới đâu trong thử nghiệm riêng l
 ### Lộ trình adapter
 
 ```
-InMemoryRetriever        ◄── đang dùng. 631 chai: dựng 24 ms, hỏi 0,24 ms
-      │  khi dữ liệu không vừa RAM / nhiều tiến trình dùng chung
-      ▼
-DuckDBRetriever          DuckDB đã là phụ thuộc sẵn
-      │  khi phục vụ nhiều người đồng thời
-      ▼
-PgVectorRetriever
+InMemoryRetriever        đối chứng · chạy mọi nơi · không cần hạ tầng
+PgVectorRetriever        đang dùng cho API · 781 chai · mọi phép tính trong SQL
 ```
 
-Mỗi bước chỉ làm khi bước trước **đau thật**, không làm trước.
+Cả hai qua **cùng 26 điều khoản**, nên đổi qua lại chỉ là một biến môi trường
+(`RETRIEVER=memory`). `DuckDBRetriever` trong lộ trình cũ đã bị bỏ: nó là bước
+trung gian để thoát khỏi RAM, mà pgvector làm xong việc đó rồi.
+
+Giữ bản in-memory KHÔNG phải vì luyến tiếc: nó là bên đối chứng. Hai bản cùng chạy
+một bộ hợp đồng thì chỗ lệch nhau sẽ đỏ ngay — còn một cổng chỉ có một bản cài đặt
+thì không chứng minh được điều gì về tính thay thế được.
 
 ## Embedding: artifact dẫn xuất, không phải nguồn sự thật
 
@@ -231,22 +241,76 @@ Ghép hai thứ lại là tự buộc hai nhịp thay đổi khác nhau vào nha
 
 | | Khi nào làm |
 |---|---|
-| `Embedder` + bảng embedding | khi câu hỏi không còn là danh sách note |
-| API (FastAPI) | khi có người dùng ngoài CLI |
-| `DuckDBRetriever` | khi dữ liệu không vừa RAM |
-| Cổng LLM | khi làm chatbot |
-| Vector DB (pgvector/Qdrant) | khi phục vụ nhiều người đồng thời |
+| Hội thoại nhiều lượt (nhớ ngữ cảnh) | khi trang test thành sản phẩm thật |
+| Tìm kiếm trộn (hybrid: thưa + đặc cùng lúc) | khi câu hỏi có note cụ thể bị trả lời kém |
+| Xác thực / giới hạn tần suất cho API | khi API ra khỏi máy cá nhân |
+| `DuckDBRetriever` | có lẽ không bao giờ — pgvector đã làm xong việc đó |
 | State store dùng chung (Postgres) | khi muốn **nhiều máy crawl song song** — xem giới hạn của lake |
 | Đọc silver trực tiếp trên S3 (DuckDB `httpfs`) | khi silver không còn vừa đĩa local, hoặc có bên thứ ba cần hỏi mà không chép file |
 
 Dự phóng hiện tại: bronze đủ danh mục ≈ **0,26 GB**; 100k chai × 768 chiều ≈
 **307 MB**, vét cạn hết vài chục mili-giây. Chưa cái nào chạm ngưỡng.
 
-Riêng *object storage cho bronze* đã rời khỏi danh sách này — xem
-[Data lake](#data-lake-minio--s3).
+Bốn thứ đã rời khỏi danh sách này vì điều kiện kích hoạt đã đến: *object storage
+cho bronze* (xem [Data lake](#data-lake-minio--s3)), *embedding*, *vector DB* và
+*cổng LLM* — cả ba cái sau cùng được kích hoạt bởi một người dùng thật: trang test
+chatbot. Đó đúng là cách danh sách này nên hoạt động.
 
 **Lý do viết ra danh sách này:** để lần sau không ai phải đoán "có nên thêm
 vector DB không" — điều kiện kích hoạt đã ghi sẵn.
+
+## Chatbot: LLM ở đâu, và ở đâu thì KHÔNG
+
+```
+câu tiếng Việt ─▶ llm/intent.py ─▶ Query ─▶ retrieval ─▶ llm/advise.py ─▶ câu trả lời
+                  (model đề xuất,            (pgvector)    (chỉ dùng kết quả,
+                   TỪ VỰNG quyết định)                      verify() soát lại)
+```
+
+LLM chỉ xuất hiện ở **hai đầu**, không bao giờ ở giữa. Nó không chọn chai, không
+chấm điểm, không biết kho dữ liệu. Giữa hai đầu đó là SQL.
+
+### Đầu ra của model là dữ liệu, không phải lệnh
+
+| Chỗ | Chặn bằng |
+|---|---|
+| Nhãn note/accord model đề xuất | lọc qua `retriever.vocabulary()` — nhãn bịa bị bỏ |
+| Hoàn cảnh | chỉ nhận 6 giá trị cộng đồng thật sự bình chọn |
+| Tên chai trong câu trả lời | `advise.verify()` soát lại với danh sách đã trả về |
+| Mọi thứ còn lại | giao diện hiện danh sách gốc cạnh câu trả lời |
+
+Lý do không phải là lo model "nói dối": một chai bịa ra trông **y hệt** một chai
+thật, nên không ai kiểm được bằng mắt, và cái sai đó đi thẳng tới người dùng cuối.
+
+### Vì sao vector đặc mà vẫn giải thích được
+
+Vector đặc không có chiều nào có tên, nên tự nó chỉ nói được "hai chai gần nhau".
+Cách giải: tìm bằng vector đặc (được độ phủ ngữ nghĩa), rồi với ĐÚNG những chai
+trả về mới lấy lý do từ bảng thưa bằng một câu join. Hai bảng, một lần hỏi:
+
+    perfume_vectors   embedding vector(384)    -> câu tự do
+    perfume_terms     (block, label, weight)   -> tìm theo note + phần "vì sao"
+
+### Hoàn cảnh là BỘ LỌC, không phải điểm cộng
+
+Câu "mùi gỗ trầm ấm cho buổi tối mùa đông" có cả phần mùi lẫn phần dịp. Nếu chọn
+một trong hai nhánh thì mất một nửa câu hỏi — đã thấy thật: đi nhánh theo dịp thì
+nó bỏ hẳn "gỗ trầm". Nên dịp được dùng làm bộ lọc trên nhánh ngữ nghĩa.
+
+Lọc chứ không cộng điểm, vì cộng hai thang điểm khác nhau (cosin và trọng số IDF)
+là chỗ rất dễ tự lừa mình: con số ra trông vẫn hợp lý nhưng không còn nghĩa gì.
+
+### Tự xuống cấp, không tự chết
+
+| Mất gì | Còn làm được gì |
+|---|---|
+| `LLM_API_KEY` | vẫn tìm được; ý định tách bằng từ khoá, câu trả lời ghép bằng Python |
+| Postgres | rơi về `InMemoryRetriever` |
+| MinIO | đọc được bản cache trong `data/raw/` |
+| Model embedding | mất nhánh câu tự do; tìm theo note vẫn chạy |
+
+Một trang test báo lỗi trắng thì không test được gì — nên mỗi tầng thiếu đều phải
+nói ra là đang thiếu gì, rồi chạy tiếp bằng phần còn lại.
 
 ## Quyết định đã chốt, kèm lý do
 
@@ -264,4 +328,11 @@ vector DB không" — điều kiện kích hoạt đã ghi sẵn.
 | Đường dẫn ngoài `data/raw/` **không bao giờ** chạm lake | chốt giữ cho ~270 test chạy trên thư mục tạm mà không đụng mạng; đã kiểm bằng cách chạy cả bộ test với `LAKE=s3` và đếm object trước/sau |
 | `boto3`, không phải SDK của MinIO | `import minio` sẽ neo project vào một nhà cung cấp ở ngay tầng thấp nhất |
 | Image MinIO pin theo **digest** | `minio/minio` trên Docker Hub đã không còn pull được; một repo đã đóng băng thì `latest` có thể bị gỡ |
+| Embedding chạy ONNX, KHÔNG chạy torch | cùng model, ~250 MB thay vì ~2,5 GB; đo được 5/5 trên câu hỏi tiếng Việt |
+| Model embedding nhỏ (384 chiều) thay vì lớn (1024) | đo trên đúng việc mình làm: MiniLM 5/5, e5-large 4/5 — không chọn theo bảng xếp hạng chung |
+| Tài liệu embedding giữ NGUYÊN tên note tiếng Anh | ba cách viết đều 5/5, nên không cần từ điển — và một tầng dịch không cần thiết là một tầng có thể dịch sai |
+| GIỮ dấu tiếng Việt, không chuẩn hoá bỏ dấu | bỏ dấu cả hai phía làm 5/5 tụt xuống 2/5 |
+| `PgVectorRetriever` tính TẤT CẢ trong SQL | giữ dữ liệu trong RAM thì kho vector không giải quyết gì — có test canh |
+| Bảng pgvector tự dựng lại khi số chiều đổi | số chiều nằm trong kiểu cột nên `CREATE IF NOT EXISTS` không sửa được; bảng là kho phục vụ, dựng lại là đúng |
+| Test pgvector dùng bảng có TIỀN TỐ riêng | đã dính thật: test TRUNCATE đúng bảng production đang dùng |
 | Niêm thất bại **không** ném lỗi ra ngoài | hạ tầng chết không được giết mẻ crawl 10 ngày; dữ liệu còn trong spool, niêm lại bằng `lake push` |

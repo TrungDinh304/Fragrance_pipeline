@@ -28,7 +28,25 @@ WORKDIR /app
 # đây là thứ điều khiển một browser thật, nâng cấp nó nên là việc có chủ ý.
 COPY pyproject.toml README.md ./
 RUN mkdir -p perfume_intel && touch perfume_intel/__init__.py \
-    && pip install -e ".[render,warehouse,marts,lake]" "playwright==1.57.0"
+    && pip install -e ".[render,warehouse,marts,lake,embed,vectordb,api]" \
+                   "playwright==1.57.0"
+
+# Nướng model embedding vào ảnh, không tải lúc chạy. Ba lý do:
+#   - container chạy `--rm` thì mỗi lượt sẽ phải tải lại 220 MB;
+#   - lượt theo lịch không được phụ thuộc HuggingFace đang sống;
+#   - ảnh đã ghim theo digest thì model cũng phải ghim, nếu không "cùng một ảnh"
+#     vẫn cho ra vector khác nhau — mà vector khác nhau thì so sánh vô nghĩa.
+#
+# Để ở /opt/models chứ không phải HOME: bước này chạy dưới root, còn tiến trình
+# chạy dưới uid 1000, nên phải chmod cho mọi user đọc được.
+ENV FASTEMBED_CACHE_PATH=/opt/models \
+    HF_HOME=/opt/models/hf \
+    HF_HUB_DISABLE_SYMLINKS=1
+RUN python -c "from fastembed import TextEmbedding; \
+m='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'; \
+e=TextEmbedding(model_name=m); v=next(iter(e.embed(['thu nghiem']))); \
+print('model san sang:', m, len(v), 'chieu')" \
+    && chmod -R a+rX /opt/models
 
 # Google Chrome THẬT, không phải Chromium đóng gói. Đây không phải sở thích: đo
 # trên 10 trang Fragrantica, Chromium của Playwright qua được 1/10 (9 lần
