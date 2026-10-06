@@ -9,269 +9,349 @@
     --nen: #faf9f7; --the: #ffffff; --vien: #e5e0d8;
     --chu: #1c1a17; --chu-nhat: #6b6459; --chu-mo: #9a9287;
     --nhan: #8a6a3b; --nhan-nhat: #f2ece1;
-    --do: #a8432c; --xanh: #3f6b4a;
-    --rong: 1180px;
+    --khach: #efe8da; --do: #a8432c;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --nen: #16150f; --the: #1f1d17; --vien: #342f25;
       --chu: #f0ece4; --chu-nhat: #b3aa9c; --chu-mo: #807867;
-      --nhan: #d8b277; --nhan-nhat: #2a2418;
-      --do: #e08a72; --xanh: #8fc3a0;
+      --nhan: #d8b277; --nhan-nhat: #2a2418; --khach: #2e2819;
+      --do: #e08a72;
     }
   }
   :root[data-theme="dark"] {
     --nen: #16150f; --the: #1f1d17; --vien: #342f25;
     --chu: #f0ece4; --chu-nhat: #b3aa9c; --chu-mo: #807867;
-    --nhan: #d8b277; --nhan-nhat: #2a2418;
-    --do: #e08a72; --xanh: #8fc3a0;
+    --nhan: #d8b277; --nhan-nhat: #2a2418; --khach: #2e2819;
+    --do: #e08a72;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--nen); color: var(--chu);
     font: 15px/1.6 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-    padding: 24px 16px 64px;
+    display: flex; flex-direction: column;
   }
-  .bao { max-width: var(--rong); margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
-  .phu { color: var(--chu-nhat); font-size: 13px; margin: 0 0 20px; }
-  .trang-thai {
-    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;
-    font-size: 12px;
+  header {
+    padding: 14px 16px; border-bottom: 1px solid var(--vien);
+    background: var(--the); position: sticky; top: 0; z-index: 5;
   }
+  .bao { max-width: 880px; margin: 0 auto; width: 100%; }
+  header .bao { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
   .chip {
-    background: var(--the); border: 1px solid var(--vien);
-    border-radius: 999px; padding: 4px 11px; color: var(--chu-nhat);
+    font-size: 11.5px; color: var(--chu-nhat); background: var(--nen);
+    border: 1px solid var(--vien); border-radius: 999px; padding: 3px 10px;
   }
   .chip b { color: var(--chu); font-weight: 600; }
   .chip.canh { border-color: var(--do); color: var(--do); }
-  form { display: flex; gap: 8px; margin-bottom: 10px; }
-  input[type=text] {
-    flex: 1; padding: 11px 14px; font: inherit; color: var(--chu);
+  .lam-moi {
+    margin-left: auto; font: inherit; font-size: 12.5px; cursor: pointer;
+    background: transparent; color: var(--chu-nhat);
+    border: 1px solid var(--vien); border-radius: 8px; padding: 5px 12px;
+  }
+
+  main { flex: 1; overflow-y: auto; padding: 20px 16px 8px; }
+  .luot { margin-bottom: 20px; }
+  .bong {
+    padding: 11px 15px; border-radius: 14px; white-space: pre-wrap;
+    max-width: 85%; width: fit-content;
+  }
+  .khach .bong {
+    background: var(--khach); margin-left: auto; border-bottom-right-radius: 5px;
+  }
+  .bot .bong {
+    background: var(--the); border: 1px solid var(--vien);
+    border-bottom-left-radius: 5px;
+  }
+  .nhan-vai {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--chu-mo); margin-bottom: 5px; font-weight: 600;
+  }
+  .khach .nhan-vai { text-align: right; }
+
+  details.du-lieu { margin-top: 8px; max-width: 85%; }
+  details.du-lieu > summary {
+    cursor: pointer; font-size: 12px; color: var(--chu-mo);
+    padding: 4px 0; list-style: none;
+  }
+  details.du-lieu > summary::marker { content: ""; }
+  details.du-lieu > summary::before { content: "▸ "; }
+  details.du-lieu[open] > summary::before { content: "▾ "; }
+  details.du-lieu > summary:hover { color: var(--nhan); }
+  ol {
+    margin: 4px 0 0; padding: 10px 14px; list-style: none; counter-reset: x;
     background: var(--the); border: 1px solid var(--vien); border-radius: 10px;
   }
-  input[type=text]:focus { outline: 2px solid var(--nhan); outline-offset: -1px; }
-  button {
-    padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer;
-    background: var(--nhan); color: #fff; border: 0; border-radius: 10px;
-  }
-  button:disabled { opacity: .5; cursor: progress; }
-  .vd { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
-  .vd button {
-    background: transparent; color: var(--chu-nhat); font-weight: 400;
-    border: 1px solid var(--vien); padding: 5px 10px; font-size: 12.5px;
-    border-radius: 999px;
-  }
-  .cot { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  @media (max-width: 860px) { .cot { grid-template-columns: 1fr; } }
-  .o {
-    background: var(--the); border: 1px solid var(--vien);
-    border-radius: 12px; padding: 16px 18px;
-  }
-  .o > h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--chu-mo); margin: 0 0 12px; font-weight: 600;
-  }
-  .tra-loi { font-size: 15.5px; white-space: pre-wrap; }
-  .nghi {
-    margin-top: 12px; padding: 9px 12px; border-radius: 8px;
-    background: var(--nhan-nhat); border-left: 3px solid var(--do);
-    color: var(--do); font-size: 13px;
-  }
-  ol { margin: 0; padding-left: 0; list-style: none; counter-reset: x; }
   ol li {
-    counter-increment: x; padding: 10px 0 10px 30px; position: relative;
+    counter-increment: x; padding: 8px 0 8px 28px; position: relative;
     border-top: 1px solid var(--vien);
   }
-  ol li:first-child { border-top: 0; padding-top: 0; }
+  ol li:first-child { border-top: 0; padding-top: 2px; }
   ol li::before {
-    content: counter(x); position: absolute; left: 0; top: 10px;
-    width: 20px; height: 20px; border-radius: 50%; font-size: 11px;
+    content: counter(x); position: absolute; left: 0; top: 8px;
+    width: 19px; height: 19px; border-radius: 50%; font-size: 10.5px;
     display: grid; place-items: center; font-weight: 600;
     background: var(--nhan-nhat); color: var(--nhan);
   }
-  ol li:first-child::before { top: 0; }
-  .ten { font-weight: 600; }
-  .ten a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--vien); }
-  .hang { color: var(--chu-nhat); font-size: 12.5px; margin-top: 2px; }
-  .vi { color: var(--chu-mo); font-size: 12px; margin-top: 3px; }
-  .y-dinh { font-size: 12.5px; color: var(--chu-nhat); }
+  ol li:first-child::before { top: 2px; }
+  .ten { font-weight: 600; font-size: 14px; }
+  .ten a { color: inherit; text-decoration: none;
+           border-bottom: 1px solid var(--vien); }
+  .hang { color: var(--chu-nhat); font-size: 12px; margin-top: 1px; }
+  .vi { color: var(--chu-mo); font-size: 11.5px; margin-top: 2px; }
+  .y-dinh { font-size: 11.5px; color: var(--chu-mo); margin-top: 6px; }
   .y-dinh code {
-    background: var(--nhan-nhat); color: var(--nhan); padding: 1px 6px;
-    border-radius: 5px; font-size: 11.5px;
+    background: var(--nhan-nhat); color: var(--nhan); padding: 1px 5px;
+    border-radius: 4px;
   }
-  .trong { color: var(--chu-mo); font-style: italic; }
-  footer { margin-top: 28px; font-size: 12px; color: var(--chu-mo); }
+  .nghi {
+    margin-top: 8px; padding: 8px 12px; border-radius: 8px; max-width: 85%;
+    background: var(--nhan-nhat); border-left: 3px solid var(--do);
+    color: var(--do); font-size: 12.5px;
+  }
+  .goi-y { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+  .goi-y button {
+    background: transparent; color: var(--chu-nhat); font: inherit;
+    font-size: 12.5px; border: 1px solid var(--vien); padding: 5px 11px;
+    border-radius: 999px; cursor: pointer;
+  }
+  .goi-y button:hover { border-color: var(--nhan); color: var(--nhan); }
+
+  footer {
+    border-top: 1px solid var(--vien); background: var(--the);
+    padding: 12px 16px 14px; position: sticky; bottom: 0;
+  }
+  footer form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; padding: 11px 14px; font: inherit; color: var(--chu);
+    background: var(--nen); border: 1px solid var(--vien); border-radius: 10px;
+  }
+  input[type=text]:focus { outline: 2px solid var(--nhan); outline-offset: -1px; }
+  button.gui {
+    padding: 11px 20px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--nhan); color: #fff; border: 0; border-radius: 10px;
+  }
+  button.gui:disabled { opacity: .5; cursor: progress; }
+  /* Ẩn bằng mắt nhưng trình đọc màn hình vẫn đọc được. `display:none` thì nó
+     cũng bị bỏ, nên dùng cách cắt khỏi khung hình. */
+  .an {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .chan-ghi-chu { font-size: 11px; color: var(--chu-mo); margin-top: 7px; }
 </style>
 </head>
 <body>
-<div class="bao">
-  <h1>perfume-intel — thử chatbot</h1>
-  <p class="phu">
-    Hỏi bằng tiếng Việt. Câu trả lời do model viết, nhưng nó
-    <b>chỉ được dùng</b> danh sách bên phải — nên hai bên luôn hiện cạnh nhau để
-    đối chiếu.
-  </p>
-
-  <div class="trang-thai" id="trang-thai"></div>
-
-  <form id="form">
-    <input type="text" id="cau" autocomplete="off"
-           placeholder="ví dụ: mùi gỗ ấm cho buổi tối mùa đông">
-    <button id="gui">Hỏi</button>
-  </form>
-  <div class="vd" id="vd"></div>
-
-  <div class="cot">
-    <div class="o">
-      <h2>Câu trả lời</h2>
-      <div class="tra-loi" id="tra-loi"><span class="trong">Chưa hỏi gì.</span></div>
-      <div id="nghi"></div>
-      <div style="margin-top:14px" class="y-dinh" id="y-dinh"></div>
-    </div>
-    <div class="o">
-      <h2>Dữ liệu retriever trả về</h2>
-      <ol id="ds"><li><span class="trong">Chưa có.</span></li></ol>
-    </div>
+<header>
+  <div class="bao">
+    <h1>perfume-intel</h1>
+    <span class="chip" id="chip-retriever">đang nối…</span>
+    <span class="chip" id="chip-llm"></span>
+    <button class="lam-moi" id="lam-moi">Hội thoại mới</button>
   </div>
+</header>
 
-  <footer id="chan"></footer>
-</div>
+<main id="khung"><div class="bao" id="dong-chat"></div></main>
+
+<footer>
+  <div class="bao">
+    <form id="form">
+      <label for="cau" class="an">Câu hỏi của bạn</label>
+      <input type="text" id="cau" autocomplete="off"
+             placeholder="Hỏi bằng tiếng Việt — ví dụ: mùi gỗ ấm cho buổi tối mùa đông">
+      <button class="gui" id="gui">Gửi</button>
+    </form>
+    <div class="goi-y" id="goi-y"></div>
+    <div class="chan-ghi-chu" id="chan"></div>
+  </div>
+</footer>
 
 <script>
-const VI_DU = [
+const MO_DAU = [
   "mùi gỗ ấm cho buổi tối mùa đông",
   "nước hoa tươi mát đi biển mùa hè",
-  "chai nào có oud mà nhiều người đánh giá",
   "mui hoa nhe nhang cho nu",
-  "nước hoa vanilla ngọt cho nữ dùng ban ngày",
+];
+// Gợi ý sau khi đã có một lượt — đây mới là chỗ thử phần hội thoại.
+const NOI_TIEP = [
+  "nhẹ hơn chút được không",
+  "còn gì nữa không",
+  "chai thứ 2 thì sao",
+  "mùa hè thì sao",
+  "cho nữ thì sao",
 ];
 
 const $ = (id) => document.getElementById(id);
+let phien = null;
+let soLuot = 0;
 
-function chip(nhan, gt, canh) {
-  const d = document.createElement("span");
-  d.className = "chip" + (canh ? " canh" : "");
-  d.innerHTML = nhan + " <b>" + gt + "</b>";
-  return d;
+function chip(o, nhan, gt, canh) {
+  o.className = "chip" + (canh ? " canh" : "");
+  o.innerHTML = gt ? nhan + " <b>" + gt + "</b>" : nhan;
 }
 
-async function nap() {
+async function napTrangThai() {
   try {
-    const r = await fetch("/health");
-    const d = await r.json();
-    const o = $("trang-thai");
-    o.innerHTML = "";
-    o.append(chip("retriever", d.retriever));
-    o.append(chip("chai", d.perfumes));
-    o.append(d.llm.configured
-      ? chip("model", d.llm.model)
-      : chip("model", "CHƯA CÓ KHOÁ — chỉ ghép câu sẵn", true));
+    const d = await (await fetch("/health")).json();
+    chip($("chip-retriever"), "", d.retriever + " · " + d.perfumes + " chai");
+    if (d.llm.configured) chip($("chip-llm"), "model", d.llm.model);
+    else chip($("chip-llm"), "chưa có khoá model — câu trả lời ghép sẵn", "", true);
     $("chan").textContent = "lake: " + d.lake;
   } catch (e) {
-    $("trang-thai").append(chip("API", "không gọi được: " + e.message, true));
+    chip($("chip-retriever"), "API không gọi được: " + e.message, "", true);
   }
 }
 
-function veDanhSach(ms) {
-  const ol = $("ds");
-  ol.innerHTML = "";
-  if (!ms.length) {
-    ol.innerHTML = '<li><span class="trong">Không có chai nào.</span></li>';
-    return;
+function veGoiY() {
+  const o = $("goi-y");
+  o.innerHTML = "";
+  for (const v of (soLuot === 0 ? MO_DAU : NOI_TIEP)) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = v;
+    b.onclick = () => hoi(v);
+    o.append(b);
   }
-  for (const m of ms) {
+}
+
+function themBong(vai, chu) {
+  const l = document.createElement("div");
+  l.className = "luot " + (vai === "khach" ? "khach" : "bot");
+  const n = document.createElement("div");
+  n.className = "nhan-vai"; n.textContent = vai === "khach" ? "Bạn" : "Tư vấn";
+  const b = document.createElement("div");
+  b.className = "bong"; b.textContent = chu;
+  l.append(n, b);
+  $("dong-chat").append(l);
+  $("khung").scrollTop = $("khung").scrollHeight;
+  return l;
+}
+
+function veDuLieu(l, d) {
+  const ms = d.matches || [];
+  const co = (d.seed ? 1 : 0) + ms.length;
+  if (!co) return;
+  const det = document.createElement("details");
+  det.className = "du-lieu";
+  // Mở sẵn: nguyên tắc là người đọc đối chiếu được câu trả lời với dữ liệu gốc,
+  // nên không bắt họ bấm thêm một lần mới thấy.
+  det.open = true;
+  const sm = document.createElement("summary");
+  sm.textContent = "dữ liệu retriever trả về (" + co + ")";
+  det.append(sm);
+
+  const ol = document.createElement("ol");
+  const ds = d.seed ? [d.seed, ...ms] : ms;
+  for (const m of ds) {
     const li = document.createElement("li");
     const ten = document.createElement("div");
     ten.className = "ten";
-    ten.textContent = m.name || "(không tên)";
     if (m.url) {
       const a = document.createElement("a");
       a.href = m.url; a.target = "_blank"; a.rel = "noopener";
       a.textContent = m.name || "(không tên)";
-      ten.textContent = ""; ten.append(a);
-    }
+      ten.append(a);
+    } else ten.textContent = m.name || "(không tên)";
     li.append(ten);
-    const phan = [];
-    if (m.brand) phan.push(m.brand);
-    if (m.rating != null) phan.push(m.rating.toFixed(2) + "★");
-    if (m.rating_count) phan.push(m.rating_count.toLocaleString("vi-VN") + " vote");
-    if (m.gender) phan.push(m.gender);
-    phan.push("khớp " + m.score.toFixed(3));
+    const p = [];
+    if (m.brand) p.push(m.brand);
+    if (m.rating != null) p.push(m.rating.toFixed(2) + "★");
+    if (m.rating_count) p.push(m.rating_count.toLocaleString("vi-VN") + " lượt");
+    if (m.gender) p.push(m.gender);
     const h = document.createElement("div");
-    h.className = "hang"; h.textContent = phan.join(" · ");
+    h.className = "hang"; h.textContent = p.join(" · ");
     li.append(h);
     if (m.why && m.why.length) {
       const v = document.createElement("div");
       v.className = "vi";
-      v.textContent = "vì: " + m.why
-        .map((w) => w.block + " " + w.label).join(", ");
+      v.textContent = "vì: " + m.why.map((w) => w.block + " " + w.label).join(", ");
       li.append(v);
     }
     ol.append(li);
   }
-}
+  det.append(ol);
 
-function veYDinh(d) {
-  const p = [];
+  const yd = [];
   const them = (nhan, gt) => {
-    if (gt && gt.length) p.push(nhan + ": " + [].concat(gt)
+    if (gt && gt.length) yd.push(nhan + ": " + [].concat(gt)
       .map((x) => "<code>" + x + "</code>").join(" "));
   };
+  yd.push("lượt: <code>" + d.action + "</code>");
   them("note", d.intent.notes);
   them("accord", d.intent.accords);
   them("dịp", d.intent.occasions);
   if (d.intent.gender) them("giới tính", [d.intent.gender]);
   if (d.unknown && d.unknown.length) them("không hiểu", d.unknown);
-  const rs = Object.entries(d.resolved || {});
-  if (rs.length) p.push("hiểu thành: " + rs
-    .map(([k, v]) => "<code>" + k + " → " + v + "</code>").join(" "));
-  if (!d.llm) p.push("<i>chưa cấu hình khoá model — câu trả lời ghép sẵn, ý định tách bằng từ khoá</i>");
-  $("y-dinh").innerHTML = p.length ? "Ý định đã tách — " + p.join(" · ") : "";
+  if (d.exhausted) yd.push("<i>đã hết chai mới cho điều kiện này</i>");
+  if (!d.llm) yd.push("<i>chưa có khoá model</i>");
+  const o = document.createElement("div");
+  o.className = "y-dinh"; o.innerHTML = yd.join(" · ");
+  det.append(o);
+  l.append(det);
+
+  if (d.suspicious && d.suspicious.length) {
+    const c = document.createElement("div");
+    c.className = "nghi";
+    c.innerHTML = "Câu trả lời nhắc tên không có trong dữ liệu: <b>"
+      + d.suspicious.join(", ") + "</b> — hãy đối chiếu danh sách trên.";
+    l.append(c);
+  }
+  $("khung").scrollTop = $("khung").scrollHeight;
 }
 
 async function hoi(cau) {
+  if (!cau) return;
+  $("cau").value = "";
   $("gui").disabled = true;
-  $("tra-loi").innerHTML = '<span class="trong">Đang hỏi…</span>';
-  $("nghi").innerHTML = "";
+  themBong("khach", cau);
+  const cho = themBong("bot", "…");
   try {
     const r = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: cau, limit: 5 }),
+      body: JSON.stringify({ message: cau, limit: 5, session_id: phien }),
     });
-    if (!r.ok) throw new Error("HTTP " + r.status + " " + (await r.text()).slice(0, 200));
+    if (!r.ok) throw new Error("HTTP " + r.status + " " + (await r.text()).slice(0, 180));
     const d = await r.json();
-    $("tra-loi").textContent = d.answer;
-    veDanhSach(d.matches || []);
-    veYDinh(d);
-    if (d.suspicious && d.suspicious.length) {
-      $("nghi").innerHTML = '<div class="nghi">Câu trả lời nhắc tên không có '
-        + "trong danh sách: <b>" + d.suspicious.join(", ") + "</b>. "
-        + "Đây là lớp soát tự động — hãy đối chiếu với danh sách bên phải.</div>";
-    }
+    phien = d.session_id;
+    soLuot = d.turn || soLuot + 1;
+    cho.querySelector(".bong").textContent = d.answer;
+    veDuLieu(cho, d);
+    veGoiY();
   } catch (e) {
-    $("tra-loi").innerHTML = '<span style="color:var(--do)">Lỗi: '
-      + e.message + "</span>";
+    const b = cho.querySelector(".bong");
+    b.textContent = "Lỗi: " + e.message;
+    b.style.color = "var(--do)";
   } finally {
     $("gui").disabled = false;
+    $("cau").focus();
   }
 }
 
 $("form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const c = $("cau").value.trim();
-  if (c) hoi(c);
+  hoi($("cau").value.trim());
 });
 
-for (const v of VI_DU) {
-  const b = document.createElement("button");
-  b.type = "button"; b.textContent = v;
-  b.onclick = () => { $("cau").value = v; hoi(v); };
-  $("vd").append(b);
-}
+$("lam-moi").addEventListener("click", async () => {
+  if (phien) {
+    try {
+      await fetch("/chat/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: phien }),
+      });
+    } catch (e) { /* phiên mất rồi cũng không sao */ }
+  }
+  phien = null; soLuot = 0;
+  $("dong-chat").innerHTML = "";
+  veGoiY();
+  $("cau").focus();
+});
 
-nap();
+napTrangThai();
+veGoiY();
+$("cau").focus();
 </script>
 </body>
 </html>

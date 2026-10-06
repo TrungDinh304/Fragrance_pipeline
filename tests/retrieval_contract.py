@@ -127,6 +127,72 @@ def check_cau_tu_do_khong_khop_gi_thi_bao_lai(make: Make) -> None:
         "câu không khớp gì mà vẫn trả về kết quả và không báo gì"
 
 
+def check_cau_tu_do_va_hoan_canh_dung_ca_hai(make: Make) -> None:
+    """Có CẢ câu tự do lẫn hoàn cảnh thì phải dùng cả hai, không bỏ một bên.
+
+    Hai adapter đã lệch nhau đúng chỗ này hai lần: điều kiện định tuyến viết là
+    "có hoàn cảnh -> nhánh theo term", nên chỉ cần khách nói một chữ về mùa là
+    phần mùi trong câu bị bỏ sạch. Không gây lỗi, không làm đỏ test nào — chỉ làm
+    câu trả lời nói về mùa thay vì nói về mùi.
+
+    Kiểm bằng LÝ DO: nếu phần mùi được dùng thì lý do phải có ít nhất một khối mùi
+    (accord hoặc note), không chỉ toàn `occasion`.
+    """
+    r = make(rows())
+    res = r.search(Query(text="nước hoa mùi oud gỗ ấm cho mùa đông",
+                         occasions=("winter",), limit=3, explain=True))
+    assert res.matches, "có cả câu tự do lẫn hoàn cảnh mà không ra gì"
+    khoi = {w.block for m in res.matches for w in m.why}
+    assert khoi & {ports.ACCORD, ports.NOTE}, (
+        f"lý do chỉ có {khoi or 'rỗng'} — phần mùi trong câu đã bị bỏ, "
+        f"chỉ còn hoàn cảnh")
+
+
+def check_hoi_theo_hoan_canh_van_co_ly_do_ve_mui(make: Make) -> None:
+    """Hỏi theo hoàn cảnh THUẦN cũng phải nói được chai đó mùi gì.
+
+    Lý do chỉ có `occasion` là đúng nhưng vô dụng: "hợp mùa lạnh, hợp buổi tối"
+    không giúp người bán nói được câu nào về mùi.
+    """
+    res = make(rows()).search(Query(occasions=("winter",), limit=3,
+                                    explain=True))
+    assert res.matches, "hỏi theo hoàn cảnh mà không ra gì"
+    khoi = {w.block for m in res.matches for w in m.why}
+    assert khoi & {ports.ACCORD, ports.NOTE},         f"lý do chỉ có {khoi or 'rỗng'} — không nói chai đó mùi gì"
+
+
+def check_hoan_canh_khai_tuong_minh_thang_chu_trong_cau(make: Make) -> None:
+    """`occasions` khai tường minh phải GHI ĐÈ mấy trục đọc ra được từ `text`.
+
+    Trong hội thoại, `text` cộng dồn qua các lượt. Khách hỏi mùa đông rồi sau đó
+    nói "mùa hè thì sao": ý định đã đổi sang summer, nhưng câu cộng dồn vẫn còn
+    chữ "mùa đông". Trộn cả hai thì kết quả vừa hợp mùa nóng vừa hợp mùa lạnh —
+    tức là lượt đó không đổi gì cả, dù khách vừa nói rõ muốn đổi.
+    """
+    r = make(rows())
+    res = r.search(Query(occasions=("summer",),
+                         text="mùa đông lạnh ... mùa hè thì sao",
+                         limit=5, explain=True))
+    assert res.matches, "không ra gì"
+    nhan = {w.label for m in res.matches for w in m.why
+            if w.block == ports.OCCASION}
+    assert "winter" not in nhan, (
+        f"'winter' đọc ra từ câu vẫn được dùng dù đã khai occasions=summer: "
+        f"{nhan}")
+
+
+def check_chai_goc_cung_co_ly_do(make: Make) -> None:
+    """Chai gốc (`seed`) cũng phải có lý do về mùi của chính nó.
+
+    Thiếu thì câu trả lời về đúng chai đó phải nói "chưa có đủ dữ liệu về mùi"
+    trong khi dữ liệu có đủ — đã thấy thật khi thử hội thoại.
+    """
+    res = make(rows()).search(Query(like_perfume="Oud Thẳng", limit=2,
+                                    explain=True))
+    assert res.seed is not None
+    assert res.seed.why, "chai gốc không có lý do nào"
+
+
 def check_cau_tu_do_van_ton_trong_bo_loc(make: Make) -> None:
     """Nhánh câu tự do là nhánh THỨ BA, rất dễ quên áp bộ lọc — y như nhánh
     `like_perfume` từng quên lọc giới tính."""

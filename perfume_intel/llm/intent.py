@@ -24,12 +24,35 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 
 from ..retrieval import ports
 from ..retrieval.ports import Query
 from .ports import ChatModel, LLMUnavailable, Message
 
 log = logging.getLogger(__name__)
+
+# Ba việc mà một lượt nói tiếp có thể là. Phân biệt được ba cái này là cả phần khó
+# của hội thoại nhiều lượt.
+MOI = "moi"              # câu hỏi mới, bỏ hết ngữ cảnh cũ
+LOC_THEM = "loc_them"    # vẫn chủ đề cũ, thêm/sửa điều kiện ("nhẹ hơn", "hãng khác")
+VE_CHAI = "ve_chai"      # hỏi về một chai ĐÃ HIỆN ("chai thứ 2 thì sao")
+VIEC = (MOI, LOC_THEM, VE_CHAI)
+
+# Câu tự do dài quá thì cắt. Khi lọc thêm, text được cộng dồn qua các lượt nên
+# không có trần là nó phình mãi và vector mất hết trọng tâm.
+MAX_TEXT = 300
+
+
+@dataclass(frozen=True)
+class Intent:
+    """Ý định của MỘT lượt, đã lọc qua từ vựng thật."""
+
+    action: str
+    query: Query
+    # Khi `action == VE_CHAI`: khoá của chai người dùng đang trỏ tới. None nghĩa là
+    # không giải được — phía trên phải hỏi lại cho rõ, KHÔNG được đoán.
+    target: str | None = None
 
 GIOI_TINH = ("Nam", "Nữ", "Unisex")
 

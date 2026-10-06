@@ -106,9 +106,19 @@ class InMemoryRetriever:
 
         if query.like_perfume:
             return self._search_like(query)
-        if query.notes or query.accords or query.occasions:
+        # Có note/accord cụ thể -> nhánh term (chính xác, giải thích được).
+        if query.notes or query.accords:
             return self._search_terms(query)
-        return self._search_text(query)
+        # Có câu tự do -> nhánh câu tự do, KỂ CẢ khi cũng có hoàn cảnh.
+        #
+        # Trước đây điều kiện là `or query.occasions`, nên chỉ cần có mùa là `text`
+        # bị bỏ hẳn: "mùi gỗ trầm ấm cho buổi tối mùa đông" chỉ còn tìm theo
+        # winter+night. Tệ hơn, `PgVectorRetriever` lại dùng hoàn cảnh làm bộ lọc
+        # trên nhánh ngữ nghĩa — nên hai adapter cho ra kết quả khác nhau trên
+        # cùng một Query, đúng thứ bộ hợp đồng tồn tại để ngăn.
+        if (query.text or "").strip():
+            return self._search_text(query)
+        return self._search_terms(query)
 
     def _search_like(self, q: Query) -> SearchResult:
         position = self._index.find(q.like_perfume)
@@ -122,7 +132,11 @@ class InMemoryRetriever:
         return SearchResult(
             matches=tuple(self._match_of(h.row, h.score, _reasons(h.why))
                           for h in hits),
-            seed=self._match(position, 1.0),
+            # Seed cũng cần lý do: không có thì câu trả lời về đúng chai đó phải
+            # nói "chưa có đủ dữ liệu về mùi của nó" trong khi dữ liệu có đủ.
+            seed=self._match_of(self._index.rows[position], 1.0,
+                                self._mui_cua_chai(self._index.rows[position],
+                                                   ()) if q.explain else ()),
             ambiguous=tuple(self._match(i, 1.0) for i in others[:5])
             if len(others) > 1 else ())
 
@@ -160,6 +174,18 @@ class InMemoryRetriever:
 
     def _search_text(self, q: Query) -> SearchResult:
         terms, axes, khong_hieu = self._tach_tu(q.text or "")
+        # TRƯỜNG KHAI TƯỜNG MINH THẮNG CHỮ ĐỌC RA TỪ CÂU.
+        #
+        # `q.occasions` do tầng tách ý định quyết định; nếu nó có giá trị thì đó là
+        # quyết định, và mấy trục đọc được từ `text` bị bỏ.
+        #
+        # Vì sao quan trọng: trong hội thoại, `text` CỘNG DỒN qua các lượt. Khách
+        # hỏi mùa đông rồi sau đó nói "mùa hè thì sao" — ý định đã đổi sang summer,
+        # nhưng câu cộng dồn vẫn còn chữ "mùa đông". Trộn cả hai thì kết quả vừa
+        # hợp mùa nóng vừa hợp mùa lạnh, tức là không đổi gì cả.
+        khai = [a.strip().lower() for a in q.occasions
+                if (a or "").strip().lower() in ports.OCCASIONS]
+        axes = list(dict.fromkeys(khai)) if khai else axes
         vector = features.query_from_terms(terms, occasion=axes,
                                            idf=self._index.idf)
         if not vector:
@@ -167,14 +193,40 @@ class InMemoryRetriever:
         hits = self._index.query(vector, limit=q.limit, gender=q.gender,
                                  min_votes=q.min_votes, explain=q.explain)
         return SearchResult(
-            matches=tuple(self._match_of(h.row, h.score, _reasons(h.why))
-                          for h in hits),
+            matches=tuple(self._match_of(
+                h.row, h.score,
+                self._mui_cua_chai(h.row, _reasons(h.why)) if q.explain
+                else _reasons(h.why)) for h in hits),
             # Báo lại ĐÃ HIỂU câu đó thành gì — nếu không, người hỏi nhận một
             # danh sách trông hợp lý mà không biết nó trả lời câu nào.
             resolved={q.text or "": ", ".join(
                 [t.partition(":")[2] for t in terms] + axes)} if terms or axes
             else {},
             unknown=tuple(khong_hieu))
+
+    @staticmethod
+    def _mui_cua_chai(row: Row, da_co: tuple[Reason, ...],
+                      so: int = 3) -> tuple[Reason, ...]:
+        """Bù lý do bằng mùi mạnh nhất của chính chai đó.
+
+        Câu hỏi tiếng Việt không chứa tên nhãn tiếng Anh, nên phần khớp được
+        thường chỉ là trục hoàn cảnh — lý do ra "hợp mùa lạnh, hợp buổi tối":
+        đúng nhưng không nói chai đó MÙI GÌ. `PgVectorRetriever` làm cùng việc này
+        bằng SQL; hai adapter phải nói cùng một thứ.
+        """
+        ra = list(da_co)
+        manh = sorted((row.accords or {}).items(), key=lambda kv: -(kv[1] or 0))
+        for ten, _diem in manh:
+            if len(ra) >= so:
+                break
+            if not any(r.label == ten for r in ra):
+                ra.append(Reason(block=ports.ACCORD, label=ten, weight=0.0))
+        for ten in (row.notes or []):
+            if len(ra) >= so:
+                break
+            if not any(r.label.lower() == ten.lower() for r in ra):
+                ra.append(Reason(block=ports.NOTE, label=ten, weight=0.0))
+        return tuple(ra)
 
     def _search_terms(self, q: Query) -> SearchResult:
         terms: list[str] = []
@@ -199,8 +251,10 @@ class InMemoryRetriever:
         hits = self._index.query(vector, limit=q.limit, gender=q.gender,
                                  min_votes=q.min_votes, explain=q.explain)
         return SearchResult(
-            matches=tuple(self._match_of(h.row, h.score, _reasons(h.why))
-                          for h in hits),
+            matches=tuple(self._match_of(
+                h.row, h.score,
+                self._mui_cua_chai(h.row, _reasons(h.why)) if q.explain
+                else _reasons(h.why)) for h in hits),
             resolved=resolved, unknown=tuple(unknown))
 
     # ---------------------------------------------------------------- hãng

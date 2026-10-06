@@ -67,7 +67,7 @@ bronze chạy **hoàn toàn offline**, sửa công thức rồi chạy lại bao
 | 1 | `sources/base.py` `SiteScraper` | thêm site mới | `test_parsers.py` · `test_resume_cache.py` |
 | 2 | `core/objects.py` `ObjectStore` | MinIO → AWS/R2/SeaweedFS | **hợp đồng 19 điều khoản**, chạy cho cả 2 adapter |
 | 3 | `core/bronze.py` | bố cục kho thô, đĩa ↔ S3 | `test_bronze.py` · `test_lake.py` |
-| 4 | `retrieval/ports.py` `Retriever` | in-memory ↔ pgvector | **hợp đồng 26 điều khoản**, chạy cho cả 2 adapter |
+| 4 | `retrieval/ports.py` `Retriever` | in-memory ↔ pgvector | **hợp đồng 30 điều khoản**, chạy cho cả 2 adapter |
 | 5 | `llm/ports.py` `ChatModel` | 9router → OpenAI/Ollama/bất kỳ | tự xuống cấp được khi mất model |
 | 6 | `embedding/ports.py` `Embedder` | ONNX local → API nào khác | **hợp đồng 11 điều khoản** + bộ đo chất lượng riêng |
 
@@ -182,7 +182,7 @@ make analyze                         # chỉ số + report.html -> data/processe
 make similar Angham                  # chai nào giống chai này
 make similar NOTES="oud,vanilla"     # chai nào nhiều note này nhất
 make mini                            # ghép bản mini
-make test                            # 16 bộ · 291 test · không cần mạng
+make test                            # 18 bộ · 335 test · không cần mạng
 make lake                            # datalake: hai bên đang có gì  [lake]
 
 # --- Docker ---
@@ -643,6 +643,48 @@ make api                            # -> http://localhost:8000
 Trang test hiện **câu trả lời và dữ liệu gốc cạnh nhau**, vì câu trả lời do model
 viết còn danh sách là của retriever — có đối chiếu được thì mới tin được.
 
+#### Hội thoại nhiều lượt
+
+Trang giữ ngữ cảnh, nên nói tiếp được:
+
+```
+Bạn:  mùi gỗ trầm ấm cho buổi tối mùa đông
+Bot:  Green Wood, Red Wood, Wood for Him …
+Bạn:  nhẹ hơn chút được không          ← vẫn mùa đông + buổi tối, chai KHÁC
+Bot:  London, Inara Black, Oud Wood …
+Bạn:  chai thứ 2 thì sao               ← trỏ vào Inara Black
+Bot:  Inara Black … mùi leather, note spicy notes …
+Bạn:  còn gì nữa không                 ← quay lại mạch tìm kiếm trước đó
+Bạn:  mùa hè thì sao                   ← ĐỔI mùa, không phải thêm mùa
+Bạn:  cho nữ thì sao                   ← thêm giới tính, giữ mùa hè
+```
+
+Mỗi lượt được phân thành một trong **ba việc**, và đây là phần khó nhất:
+
+| | Khi nào | Làm gì |
+|---|---|---|
+| `moi` | khách hỏi chuyện khác hẳn | bỏ hết điều kiện cũ |
+| `loc_them` | "nhẹ hơn", "còn gì nữa", "mùa hè thì sao" | **gộp** với điều kiện cũ |
+| `ve_chai` | "chai thứ 2", "cái đầu tiên", "chai đó" | trỏ vào đúng chai đã hiện |
+
+Bốn luật đáng biết, mỗi luật sinh ra từ một lỗi đã gặp khi thử thật:
+
+- **Không đoán chai.** `ve_chai` mà không giải được khách trỏ vào chai nào thì hạ
+  xuống `loc_them`, chứ không chọn bừa. Đoán ở đây cho ra một chai CÓ THẬT nên
+  không ai thấy sai — chỉ thấy câu trả lời nói về chai khác.
+- **Bỏ chai đã hiện.** "nhẹ hơn chút" thường không mang theo điều kiện nào tách
+  được, nên truy vấn gần như không đổi và kết quả ra y hệt lượt trước. Lặp lại
+  nguyên văn là dấu hiệu "bot hỏng" rõ nhất. Hết chai mới thì **nói thật**.
+- **Hỏi về một chai là nhánh rẽ, không phải đổi chủ đề.** Sau lượt `ve_chai`, lượt
+  sau quay lại mạch tìm kiếm trước đó — nếu không, "còn gì nữa không" mất hết
+  ngữ cảnh và trả về rỗng.
+- **Trường khai tường minh thắng chữ trong câu.** Khách nói "mùa hè thì sao" thì
+  hoàn cảnh bị GHI ĐÈ, dù câu cộng dồn qua các lượt vẫn còn chữ "mùa đông".
+
+Phiên nằm trong bộ nhớ tiến trình, có trần (200 phiên, 40 lượt, hết hạn 6 giờ).
+Nghĩa là **restart API là mất hội thoại đang dở** — hội thoại không phải dữ liệu
+cần giữ, nên nó không vào Postgres.
+
 #### Một lượt chat đi qua những đâu
 
 ```
@@ -694,7 +736,8 @@ không có cách nào phát hiện từ con số. Nên `model_id` đi kèm mọi
 |---|---|
 | `GET /` | trang test chatbot |
 | `GET /health` | retriever nào đang dùng, bao nhiêu chai, có khoá LLM chưa |
-| `POST /chat` | `{message}` → câu tư vấn + danh sách + ý định đã tách |
+| `POST /chat` | `{message, session_id?}` → câu tư vấn + danh sách + ý định + `session_id` |
+| `POST /chat/reset` | `{session_id}` → bỏ một phiên |
 | `POST /search` | tra cứu thuần, không qua LLM |
 | `GET /vocabulary/{block}` | nhãn dùng được: `note`, `accord`, `occasion`... |
 
@@ -1187,7 +1230,7 @@ scripts/demo.py        xem nhanh tháp hương của vài chai
 scripts/migrate_bronze.py  dọn kho thô về bố cục mỗi loại một thư mục
 tests/                 test offline trên HTML thật đã lưu
   objectstore_contract.py  hợp đồng ObjectStore — 19 điều khoản
-  retrieval_contract.py    hợp đồng Retriever — 23 điều khoản
+  retrieval_contract.py    hợp đồng Retriever — 30 điều khoản
 ```
 
 Năm quy tắc giữ cho cấu trúc này không rối lại:
@@ -1214,7 +1257,7 @@ vào ruột, hoặc làm một máy mới báo sai là chưa có dữ liệu.
 ## Test
 
 ```powershell
-make test                      # 16 bộ · 291 test
+make test                      # 18 bộ · 335 test
 python tests\test_parsers.py   # hoặc từng bộ một
 python -m pytest tests/ -v     # nếu có cài pytest
 ```
@@ -1231,6 +1274,8 @@ python -m pytest tests/ -v     # nếu có cài pytest
 | `test_lake.py` | Niêm/kéo về, luật "file dài hơn thắng", mất MinIO giữa mẻ crawl |
 | `test_embedding.py` | **Hợp đồng `Embedder`** + cách viết tài liệu + đo chất lượng trên dữ liệu thật |
 | `test_pgvector.py` | **Hợp đồng `Retriever` trên pgvector** + canh "tính toán nằm trong SQL, không trong RAM" |
+| `test_llm.py` | Tách ý định, giọng tư vấn, và ba lớp chặn model bịa — không gọi model thật |
+| `test_chat.py` | Hội thoại nhiều lượt: phiên, phân loại lượt, giải "chai thứ 2" |
 | `test_analytics.py` | Nạp dữ liệu, các chỉ số, xuất báo cáo |
 | `test_charts.py` | Thang đo, màu, chú giải, cảnh báo khi dữ liệu mỏng |
 | `test_vectors.py` | Vector thưa: IDF, chuẩn hoá từng khối, chân dung hãng |

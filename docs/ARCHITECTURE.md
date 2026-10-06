@@ -218,7 +218,7 @@ InMemoryRetriever        đối chứng · chạy mọi nơi · không cần h�
 PgVectorRetriever        đang dùng cho API · 781 chai · mọi phép tính trong SQL
 ```
 
-Cả hai qua **cùng 26 điều khoản**, nên đổi qua lại chỉ là một biến môi trường
+Cả hai qua **cùng 30 điều khoản**, nên đổi qua lại chỉ là một biến môi trường
 (`RETRIEVER=memory`). `DuckDBRetriever` trong lộ trình cũ đã bị bỏ: nó là bước
 trung gian để thoát khỏi RAM, mà pgvector làm xong việc đó rồi.
 
@@ -241,7 +241,6 @@ Ghép hai thứ lại là tự buộc hai nhịp thay đổi khác nhau vào nha
 
 | | Khi nào làm |
 |---|---|
-| Hội thoại nhiều lượt (nhớ ngữ cảnh) | khi trang test thành sản phẩm thật |
 | Tìm kiếm trộn (hybrid: thưa + đặc cùng lúc) | khi câu hỏi có note cụ thể bị trả lời kém |
 | Xác thực / giới hạn tần suất cho API | khi API ra khỏi máy cá nhân |
 | `DuckDBRetriever` | có lẽ không bao giờ — pgvector đã làm xong việc đó |
@@ -300,6 +299,30 @@ nó bỏ hẳn "gỗ trầm". Nên dịp được dùng làm bộ lọc trên nh
 Lọc chứ không cộng điểm, vì cộng hai thang điểm khác nhau (cosin và trọng số IDF)
 là chỗ rất dễ tự lừa mình: con số ra trông vẫn hợp lý nhưng không còn nghĩa gì.
 
+### Hội thoại nhiều lượt: ba việc, bốn luật
+
+```
+moi       khách hỏi chuyện khác hẳn      -> bỏ hết điều kiện cũ
+loc_them  vẫn chuyện cũ, thêm điều kiện  -> GỘP với điều kiện cũ
+ve_chai   hỏi về một chai đã hiện        -> trỏ vào đúng chai đó
+```
+
+Bốn luật, mỗi luật sinh ra từ một lỗi đã thấy khi thử 6 lượt liền:
+
+| Luật | Không có nó thì |
+|---|---|
+| **Không đoán chai** — `ve_chai` không giải được thì hạ xuống `loc_them` | trả lời chắc chắn về một chai CÓ THẬT nhưng không phải chai khách hỏi; không ai phát hiện được |
+| **Bỏ chai đã hiện** ở lượt `loc_them`, và nói thật khi hết | "nhẹ hơn chút" trả lời y nguyên lượt trước — dấu hiệu "bot hỏng" rõ nhất |
+| **`ve_chai` là nhánh rẽ**, lượt sau quay lại mạch tìm kiếm trước đó | "còn gì nữa không" sau đó gộp với một query `like_perfume` và ra rỗng |
+| **Trường khai tường minh thắng chữ trong câu** | "mùa hè thì sao" ra kết quả vừa hợp mùa nóng vừa hợp mùa lạnh, tức là không đổi gì |
+
+Phiên nằm trong bộ nhớ tiến trình, có trần (200 phiên / 40 lượt / 6 giờ). Không đưa
+vào Postgres vì hội thoại chỉ có **một nửa** điều kiện đáng lưu bền: nó không dựng
+lại được, nhưng cũng không ai cần nó sau khi đóng tab.
+
+Hệ quả nói thẳng: restart API là mất hội thoại đang dở, và chạy nhiều tiến trình
+API thì mỗi tiến trình có một bộ phiên riêng.
+
 ### Tự xuống cấp, không tự chết
 
 | Mất gì | Còn làm được gì |
@@ -328,6 +351,10 @@ nói ra là đang thiếu gì, rồi chạy tiếp bằng phần còn lại.
 | Đường dẫn ngoài `data/raw/` **không bao giờ** chạm lake | chốt giữ cho ~270 test chạy trên thư mục tạm mà không đụng mạng; đã kiểm bằng cách chạy cả bộ test với `LAKE=s3` và đếm object trước/sau |
 | `boto3`, không phải SDK của MinIO | `import minio` sẽ neo project vào một nhà cung cấp ở ngay tầng thấp nhất |
 | Image MinIO pin theo **digest** | `minio/minio` trên Docker Hub đã không còn pull được; một repo đã đóng băng thì `latest` có thể bị gỡ |
+| Phiên hội thoại giữ trong bộ nhớ, không vào Postgres | nó không dựng lại được nhưng cũng không còn giá trị sau khi đóng tab |
+| `ve_chai` không giải được thì HẠ cấp, không đoán | đoán cho ra một chai có thật, nên sai mà không ai phát hiện |
+| Lượt nói tiếp BỎ những chai đã hiện | truy vấn gần như không đổi nên kết quả lặp y nguyên |
+| Hoàn cảnh khai tường minh thắng chữ đọc ra từ câu | `text` cộng dồn qua các lượt nên "mùa đông" cũ còn mãi |
 | Embedding chạy ONNX, KHÔNG chạy torch | cùng model, ~250 MB thay vì ~2,5 GB; đo được 5/5 trên câu hỏi tiếng Việt |
 | Model embedding nhỏ (384 chiều) thay vì lớn (1024) | đo trên đúng việc mình làm: MiniLM 5/5, e5-large 4/5 — không chọn theo bảng xếp hạng chung |
 | Tài liệu embedding giữ NGUYÊN tên note tiếng Anh | ba cách viết đều 5/5, nên không cần từ điển — và một tầng dịch không cần thiết là một tầng có thể dịch sai |

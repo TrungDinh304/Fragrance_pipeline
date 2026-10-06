@@ -296,6 +296,38 @@ class PgVectorRetriever:
                                     weight=round(float(w), 4)))
         return {k: tuple(v) for k, v in ra.items()}
 
+    # Khối nói về MÙI. Hoàn cảnh và độ mạnh không thuộc đây: chúng trả lời "dùng
+    # khi nào", không trả lời "mùi gì".
+    _KHOI_MUI = (ports.ACCORD, ports.NOTE)
+
+    def _them_mui_cua_chai(self, keys: Sequence[str], da_co: dict,
+                           so: int = 3) -> dict:
+        """Bù thêm lý do bằng mùi mạnh nhất của chính từng chai.
+
+        Giữ nguyên lý do đã có (khớp từ câu hỏi — cụ thể hơn), rồi điền tiếp cho
+        tới `so` bằng accord/note nặng nhất của chai đó. Một lần join cho cả trang.
+        """
+        if not keys:
+            return da_co
+        with self._con.cursor() as cur:
+            cur.execute(
+                "SELECT perfume_key, block, label, weight FROM ("
+                "  SELECT perfume_key, block, label, weight,"
+                "         row_number() OVER (PARTITION BY perfume_key"
+                "                            ORDER BY weight DESC) AS hang"
+                f"  FROM {self.t_term} WHERE perfume_key = ANY(%s)"
+                "    AND block = ANY(%s)) x "
+                "WHERE hang <= %s ORDER BY perfume_key, weight DESC",
+                (list(keys), list(self._KHOI_MUI), so))
+            hang = cur.fetchall()
+        ra = {k: list(v) for k, v in da_co.items()}
+        for k, block, label, w in hang:
+            co = ra.setdefault(k, [])
+            if len(co) >= so or any(r.label == label for r in co):
+                continue
+            co.append(Reason(block=block, label=label, weight=round(float(w), 4)))
+        return {k: tuple(v) for k, v in ra.items()}
+
     # ----------------------------------------------------------------- tìm
     def search(self, query: Query) -> SearchResult:
         if query.empty:
@@ -303,9 +335,20 @@ class PgVectorRetriever:
         self._kiem_model()
         if query.like_perfume:
             return self._theo_chai(query)
-        if query.notes or query.accords or query.occasions:
+        # Có note/accord cụ thể -> nhánh term (chính xác, giải thích được).
+        if query.notes or query.accords:
             return self._theo_term(query)
-        return self._theo_cau(query)
+        # Có câu tự do -> nhánh ngữ nghĩa, KỂ CẢ khi cũng có hoàn cảnh (hoàn cảnh
+        # thành bộ lọc trong `_theo_cau`).
+        #
+        # Điều kiện cũ có `or query.occasions`, nên chỉ cần có mùa là `text` bị bỏ
+        # hẳn. `InMemoryRetriever` đã sửa chỗ này, bản này thì chưa — nên hai
+        # adapter cho ra lý do khác nhau trên cùng một Query: bản kia nói được
+        # "mùi leather", bản này chỉ nói "hợp mùa lạnh". Thấy đúng cảnh đó khi thử
+        # hội thoại 6 lượt qua API.
+        if (query.text or "").strip():
+            return self._theo_cau(query)
+        return self._theo_term(query)
 
     # --- nhánh 1: câu tự do, tìm bằng vector đặc ---------------------------
     def _theo_cau(self, q: Query) -> SearchResult:
@@ -352,7 +395,18 @@ class PgVectorRetriever:
             return SearchResult(unknown=(q.text or "",))
 
         keys = [h[0] for h in hang]
+        # LÝ DO Ở NHÁNH NGỮ NGHĨA PHẢI NÓI VỀ MÙI, KHÔNG CHỈ VỀ DỊP.
+        #
+        # Câu hỏi tiếng Việt ("mùi gỗ trầm ấm") không chứa tên nhãn tiếng Anh, nên
+        # `_dims_tu_cau` thường chỉ khớp được trục hoàn cảnh. Nếu chỉ dựa vào đó
+        # thì lý do ra "hợp mùa lạnh, hợp buổi tối" — đúng nhưng vô dụng, vì nó
+        # không nói chai đó MÙI GÌ.
+        #
+        # Phép khớp ở đây là ngữ nghĩa nên không quy được về từng chữ trong câu
+        # hỏi. Thứ trung thực và hữu ích hơn: mùi mạnh nhất của chính chai đó.
         ly_do = self._ly_do(keys, dims) if q.explain else {}
+        if q.explain:
+            ly_do = self._them_mui_cua_chai(keys, ly_do)
         return SearchResult(
             matches=tuple(self._match(h, ly_do.get(h[0], ())) for h in hang),
             resolved={q.text or "": ", ".join(
@@ -402,6 +456,11 @@ class PgVectorRetriever:
                 "ORDER BY diem DESC, v.perfume_key LIMIT %s", bien)
             hang = cur.fetchall()
         ly_do = self._ly_do([h[0] for h in hang], dims) if q.explain else {}
+        if q.explain:
+            # Bù mùi ở nhánh term NỮA, không chỉ nhánh ngữ nghĩa. Hỏi theo hoàn
+            # cảnh thuần ("cho mùa đông") thì lý do chỉ có `occasion` — đúng nhưng
+            # không nói chai đó mùi gì, mà đó mới là thứ người bán cần.
+            ly_do = self._them_mui_cua_chai([h[0] for h in hang], ly_do)
         return SearchResult(
             matches=tuple(self._match(h, ly_do.get(h[0], ())) for h in hang),
             resolved=resolved, unknown=tuple(unknown))
@@ -468,9 +527,14 @@ class PgVectorRetriever:
                     (goc[0],))
                 dims = [f"{_BLOCK_OUT.get(b, b)}:{l}" for b, l in cur.fetchall()]
             ly_do = self._ly_do([h[0] for h in hang], dims)
+        # Seed cũng cần lý do về mùi của CHÍNH nó. Không có thì câu trả lời về đúng
+        # chai đó phải nói "chưa có đủ dữ liệu về mùi" trong khi dữ liệu có đủ —
+        # đã thấy thật khi thử hội thoại. `InMemoryRetriever` làm cùng việc này.
+        ly_do_goc = (self._them_mui_cua_chai([goc[0]], {}).get(goc[0], ())
+                     if q.explain else ())
         return SearchResult(
             matches=tuple(self._match(h, ly_do.get(h[0], ())) for h in hang),
-            seed=self._match((goc[0], 1.0, *goc[1:])),
+            seed=self._match((goc[0], 1.0, *goc[1:]), ly_do_goc),
             ambiguous=tuple(self._match((m[0], 1.0, *m[1:]))
                             for m in mo_ho[:5]) if len(mo_ho) > 1 else ())
 

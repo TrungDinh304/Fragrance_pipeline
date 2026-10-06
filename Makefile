@@ -123,6 +123,8 @@ test:
 	$(PYTHON) tests/test_lake.py
 	$(PYTHON) tests/test_embedding.py
 	$(PYTHON) tests/test_pgvector.py
+	$(PYTHON) tests/test_llm.py
+	$(PYTHON) tests/test_chat.py
 	$(PYTHON) tests/test_charts.py
 	$(PYTHON) tests/test_bronze.py
 	$(PYTHON) tests/test_warehouse.py
