@@ -62,12 +62,22 @@ TABLES: dict[str, list[tuple[str, str]]] = {
     "perfumes": [
         ("perfume_key", "VARCHAR"), ("url", "VARCHAR"),
         ("perfume_id", "VARCHAR"), ("name", "VARCHAR"), ("brand", "VARCHAR"),
+        # Khoá ngoại sang `brands`. Trước đây chỉ có tên hãng dạng chữ, nên
+        # muốn nối chai với danh mục hãng phải đi vòng qua `brand_perfumes`.
+        ("brand_key", "VARCHAR"),
         ("gender", "VARCHAR"), ("year", "INTEGER"),
         ("fragrance_family", "VARCHAR"),
         ("rating", "DOUBLE"), ("rating_count", "BIGINT"),
         ("longevity", "VARCHAR"), ("sillage", "VARCHAR"),
         ("description", "VARCHAR"), ("image", "VARCHAR"),
         ("des_key", "VARCHAR"), ("scraped_at", "VARCHAR"),
+    ],
+    # Mọi lần crawl của mỗi chai, KHÔNG khử trùng theo chai — `perfumes` chỉ giữ
+    # bản mới nhất nên mất hẳn câu "rating/số vote đổi thế nào theo thời gian".
+    # Bronze vẫn giữ đủ các lần đó; bảng này đưa chúng lên.
+    "perfume_rating_history": [
+        ("perfume_key", "VARCHAR"), ("scraped_at", "VARCHAR"),
+        ("rating", "DOUBLE"), ("rating_count", "BIGINT"),
     ],
     "perfume_accords": [
         ("perfume_key", "VARCHAR"), ("accord", "VARCHAR"),
@@ -124,12 +134,32 @@ def _latest(records: Iterable[dict], key_field: str) -> dict[str, dict]:
 
 
 # ------------------------------------------------------------------ trải phẳng
-def _perfume_rows(records: dict[str, dict]) -> dict[str, list[tuple]]:
+def _brand_key_lookup(brands: dict[str, dict],
+                      products: dict[str, dict]) -> tuple[dict, dict]:
+    """Hai cách tìm `brand_key` cho một chai, theo thứ tự tin cậy.
+
+    1. Mục lục hãng (`brand_perfumes`) — chai nằm trong trang của hãng nào thì
+       thuộc hãng đó. Chắc chắn nhất, nhưng chỉ có với hãng đã crawl mục lục.
+    2. Tên hãng khớp đúng `brands.brand_name` — phủ gần hết phần còn lại. Đo
+       trên kho hiện tại: tên hãng trong danh mục không trùng nhau.
+    """
+    by_perfume = {key: url_key(raw.get("brand_url"))
+                  for key, raw in products.items() if raw.get("brand_url")}
+    by_name = {raw.get("brand_name"): key
+               for key, raw in brands.items() if raw.get("brand_name")}
+    return by_perfume, by_name
+
+
+def _perfume_rows(records: dict[str, dict], by_perfume: dict | None = None,
+                  by_name: dict | None = None) -> dict[str, list[tuple]]:
+    by_perfume, by_name = by_perfume or {}, by_name or {}
     perfumes, accords, notes, wear = [], [], [], []
     for key, raw in records.items():
+        brand_key = by_perfume.get(key) or by_name.get(raw.get("brand"))
         perfumes.append((
             key, raw.get("url"), raw.get("perfume_id"), raw.get("name"),
-            raw.get("brand"), raw.get("gender"), _int(raw.get("year")),
+            raw.get("brand"), brand_key, raw.get("gender"),
+            _int(raw.get("year")),
             raw.get("fragrance_family"), _float(raw.get("rating")),
             _int(raw.get("rating_count")), raw.get("longevity"),
             raw.get("sillage"), raw.get("description"), raw.get("image"),
@@ -153,6 +183,19 @@ def _perfume_rows(records: dict[str, dict]) -> dict[str, list[tuple]]:
                          _int(item.get("votes"))))
     return {"perfumes": perfumes, "perfume_accords": accords,
             "perfume_notes": notes, "perfume_wear": wear}
+
+
+def _rating_history_rows(records: Iterable[dict]) -> list[tuple]:
+    """Một dòng mỗi (chai, lần crawl). Cùng chai cùng `scraped_at` thì là cùng
+    một lần crawl bị ghi hai nơi (vd. file cũ chưa dọn) — giữ một."""
+    seen: dict[tuple[str, str], tuple] = {}
+    for raw in records:
+        key, stamp = url_key(raw.get("url")), raw.get("scraped_at")
+        if not key or not stamp:
+            continue
+        seen[(key, stamp)] = (key, stamp, _float(raw.get("rating")),
+                              _int(raw.get("rating_count")))
+    return list(seen.values())
 
 
 def _brand_rows(records: dict[str, dict]) -> list[tuple]:
@@ -196,12 +239,17 @@ def build(community: Path | None = None, out_dir: Path | None = None,
     out_dir = Path(out_dir or config.SILVER_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    perfume_src = _latest(bronze.read(community, bronze.PERFUME), "url")
+    # Đọc một lần, dùng hai chỗ: `_latest` bỏ các lần crawl cũ, còn bảng lịch
+    # sử rating cần đúng những lần đó.
+    perfume_raw = list(bronze.read(community, bronze.PERFUME))
+    perfume_src = _latest(perfume_raw, "url")
     brand_src = _latest(bronze.read(community, bronze.BRAND), "brand_url")
     product_src = _latest(bronze.read(community, bronze.BRAND_PERFUME),
                           "perfume_url")
 
-    data = _perfume_rows(perfume_src)
+    data = _perfume_rows(perfume_src,
+                         *_brand_key_lookup(brand_src, product_src))
+    data["perfume_rating_history"] = _rating_history_rows(perfume_raw)
     data["brands"] = _brand_rows(brand_src)
     data["brand_perfumes"] = _brand_perfume_rows(product_src)
 
@@ -238,3 +286,101 @@ def read_silver(con, out_dir: Path | None = None) -> None:
         if path.exists():
             con.execute(f'CREATE OR REPLACE VIEW "{name}" AS '
                         f"SELECT * FROM read_parquet('{path.as_posix()}')")
+
+
+# ----------------------------------------------------- kiểm schema bảng silver
+@dataclass(frozen=True)
+class Lech:
+    """Một bảng Parquet trên ổ không khớp schema mà `TABLES` đang khai."""
+    table: str
+    loi: str = ""                       # không có file / không đọc được
+    thieu: tuple[str, ...] = ()         # code khai, file không có
+    thua: tuple[str, ...] = ()          # file có, code đã bỏ
+    sai_kieu: tuple[str, ...] = ()      # cùng tên cột, khác kiểu
+
+
+def _cot_cua(con, path: Path) -> list[tuple[str, str]]:
+    """(tên, kiểu) của từng cột trong một file Parquet.
+
+    `DESCRIBE SELECT` chứ không `parquet_schema`: nó trả kiểu LOGIC của DuckDB
+    (VARCHAR/INTEGER/DOUBLE/BIGINT) — đúng bộ tên mà `TABLES` dùng, nên so được
+    trực tiếp. `parquet_schema` trả kiểu vật lý (BYTE_ARRAY, INT64) và muốn so
+    thì phải tự dựng một bảng ánh xạ, tức là thêm một chỗ nữa để lệch.
+    """
+    rows = con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{path.as_posix()}')").fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def kiem_tra(out_dir: Path | None = None) -> list[Lech]:
+    """So schema Parquet trên ổ với `TABLES`. Rỗng nghĩa là khớp.
+
+    VÌ SAO CẦN PHÉP KIỂM NÀY
+    `data/silver/*.parquet` là artifact nằm lại trên ổ, còn `TABLES` là code đi
+    tiếp. Thêm một cột vào `TABLES` rồi chạy `make marts` mà quên `make silver`
+    thì dbt đọc file cũ và chết ngay ở model đầu tiên với
+
+        Binder Error: Referenced column "brand_key" not found in FROM clause!
+
+    Câu đó chỉ đúng chỗ vỡ nhưng không nói phải làm gì, và 65 node phía sau
+    chuyển hết sang SKIP nên bảng tổng kết trông như "chỉ 1 lỗi". Đã gặp đúng
+    như vậy. Phép kiểm này đổi nó thành một câu nói rõ thiếu cột nào, bảng nào,
+    chạy lệnh gì.
+
+    Chỉ so TÊN và KIỂU cột, KHÔNG so số dòng: "silver cũ hơn bronze" là chuyện
+    bình thường giữa hai lượt crawl, không phải lỗi. Thứ cần chặn là silver được
+    dựng bằng code có schema khác.
+    """
+    out_dir = Path(out_dir or config.SILVER_DIR)
+    # Máy này có thể chưa dựng silver mà lake đã có (máy khác dựng rồi) — kéo về
+    # trước khi kết luận là thiếu bảng, y như `read_silver`.
+    lake.ensure_local(out_dir, lake.SILVER)
+    con = connect()
+    try:
+        lech: list[Lech] = []
+        for name, khai in TABLES.items():
+            path = out_dir / f"{name}.parquet"
+            if not path.exists():
+                lech.append(Lech(name, loi="không có file"))
+                continue
+            try:
+                thuc = dict(_cot_cua(con, path))
+            except Exception as exc:        # Parquet thiếu footer, file cụt...
+                lech.append(Lech(name, loi=f"không đọc được ({exc})"))
+                continue
+            mong = dict(khai)
+            thieu = tuple(c for c in mong if c not in thuc)
+            thua = tuple(c for c in thuc if c not in mong)
+            sai = tuple(f"cột {c} là {thuc[c]}, code khai {mong[c]}"
+                        for c in mong if c in thuc and thuc[c] != mong[c])
+            if thieu or thua or sai:
+                lech.append(Lech(name, thieu=thieu, thua=thua, sai_kieu=sai))
+    finally:
+        con.close()
+    return lech
+
+
+def mo_ta_lech(lech: Sequence[Lech], out_dir: Path | None = None) -> str:
+    """Lệch ở đâu, và chạy gì để hết lệch.
+
+    Lệnh phải dựng lại nằm NGAY TRONG câu báo lỗi. Một câu chỉ nói "schema lệch"
+    thì người đọc vẫn phải đi tìm — mà lúc đó họ đang bị chặn giữa một lệnh
+    build, là lúc tệ nhất để phải đi tìm.
+    """
+    out_dir = Path(out_dir or config.SILVER_DIR)
+    dong = [f"Bảng silver ở {out_dir} không khớp schema mà code đang khai:"]
+    for item in lech:
+        if item.loi:
+            dong.append(f"  {item.table}: {item.loi}")
+            continue
+        phan = []
+        if item.thieu:
+            phan.append("thiếu cột " + ", ".join(item.thieu))
+        if item.thua:
+            phan.append("còn cột đã bỏ " + ", ".join(item.thua))
+        phan.extend(item.sai_kieu)
+        dong.append(f"  {item.table}: " + "; ".join(phan))
+    dong += ["",
+             "Parquet trên ổ được dựng bằng code cũ hơn. Dựng lại rồi chạy lại:",
+             "    make silver        (hoặc: python -m perfume_intel silver)"]
+    return "\n".join(dong)

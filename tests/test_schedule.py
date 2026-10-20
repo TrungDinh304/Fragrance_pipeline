@@ -265,8 +265,11 @@ def test_hang_lon_tran_sang_lan_sau():
 
         tong = 0
         for _ in range(3):
+            # `force=True` vì ba lát này MÔ PHỎNG BA NGÀY. Mặc định mỗi ngày chỉ
+            # một lát — bảo vệ đó nằm ở sổ trạng thái nên mọi đường gọi đều qua
+            # nó, kể cả test.
             r = daily.run_once(s.state, FakeScraper(), budget=4, max_brands=1, min_comments=0,
-                               out_dir=s.dir)
+                               out_dir=s.dir, force=True)
             tong += r.perfumes_done
 
         assert tong == 10
@@ -282,7 +285,8 @@ def test_khong_crawl_lai_chai_da_co():
                        out_dir=s.dir)
 
         lan2 = FakeScraper()
-        r2 = daily.run_once(s.state, lan2, budget=4, max_brands=1, out_dir=s.dir)
+        r2 = daily.run_once(s.state, lan2, budget=4, max_brands=1,
+                            out_dir=s.dir, force=True)
 
         assert r2.perfumes_done == 0
         assert lan2.fake.calls == [], "không được ra mạng lần nữa"
@@ -379,10 +383,11 @@ def test_hang_doi_trong_thi_khong_ra_mang():
 def test_ghi_lai_tung_lan_chay():
     with _Store() as s:
         _seeded(s, 6)
+        # Hai lát mô phỏng hai ngày -> `force=True`.
         daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1, min_comments=0,
-                       out_dir=s.dir)
+                       out_dir=s.dir, force=True)
         daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1, min_comments=0,
-                       out_dir=s.dir)
+                       out_dir=s.dir, force=True)
 
         runs = s.state.recent_runs(5)
 
@@ -631,6 +636,105 @@ def test_record_block_khong_lam_chet_lenh_dang_chay():
         got = state_mod.record_block("fragrantica", RateLimited("429"), "test",
                                      db=chan / "s.db")
     assert got is None, "ghi sổ hỏng mà vẫn báo thành công"
+
+
+
+# ---------------------------------------- mỗi ngày một lát (chặn ở sổ, không ở lịch)
+def test_chua_chay_thi_ran_today_tra_ve_none():
+    with _Store() as st:
+        assert st.state.ran_today("daily") is None
+
+
+def test_luot_da_xong_hom_nay_thi_bi_ghi_nhan():
+    """Bảo vệ "mỗi ngày một lát" nằm ở SỔ, không ở bộ lên lịch.
+
+    Lý do cụ thể, đã xảy ra thật: lượt 18:00 chạy xong bằng bộ lịch bash (144
+    request), rồi bật DAG Airflow lên là nó lập tức tạo một lượt cho khoảng vừa
+    qua và crawl tiếp. `catchup=False` KHÔNG chặn — nó nghĩa là "chỉ khoảng gần
+    nhất", không phải "không khoảng nào".
+
+    Đặt luật ở bộ lịch chỉ chặn được đúng bộ lịch đó. Đặt ở sổ thì mọi đường đi
+    đều phải qua: bash, Airflow, chạy tay, backfill.
+    """
+    with _Store() as st:
+        rid = st.state.start_run("daily", 150)
+        st.state.finish_run(rid, requests_used=144, brands_touched=2,
+                            perfumes_done=136, perfumes_failed=0,
+                            stopped_reason="hết ngân sách")
+        da = st.state.ran_today("daily")
+        assert da is not None
+        assert da["run_id"] == rid
+        assert da["requests_used"] == 144
+
+
+def test_luot_chua_xong_khong_chan_luot_sau():
+    """Lượt đang chạy dở (hoặc bị giết) không được khoá cả ngày hôm sau."""
+    with _Store() as st:
+        st.state.start_run("daily", 150)          # không finish_run
+        assert st.state.ran_today("daily") is None
+
+
+def test_luot_bi_bo_vi_site_nghi_khong_chan_luot_sau():
+    """Lượt bỏ vì site đang nghỉ tiêu 0 request — nó không phải "đã crawl hôm
+    nay", nên không được chặn lượt kế tiếp."""
+    with _Store() as st:
+        rid = st.state.start_run("daily", 150)
+        st.state.finish_run(rid, requests_used=0, brands_touched=0,
+                            perfumes_done=0, perfumes_failed=0,
+                            stopped_reason="site đang nghỉ")
+        assert st.state.ran_today("daily") is None
+
+
+def test_ran_today_phan_biet_theo_loai_luot():
+    with _Store() as st:
+        rid = st.state.start_run("products", 150)
+        st.state.finish_run(rid, requests_used=50, brands_touched=1,
+                            perfumes_done=0, perfumes_failed=0,
+                            stopped_reason=None)
+        assert st.state.ran_today("products") is not None
+        assert st.state.ran_today("daily") is None
+
+
+def test_luot_hom_qua_khong_chan_hom_nay():
+    """Chặn theo NGÀY ĐỊA PHƯƠNG. Dùng UTC thì ở múi +07 mọi lượt chạy buổi tối
+    sẽ rơi sang "ngày hôm sau" theo UTC và chặn nhầm."""
+    import sqlite3
+    from datetime import datetime, timedelta
+    with _Store() as st:
+        rid = st.state.start_run("daily", 150)
+        st.state.finish_run(rid, requests_used=144, brands_touched=2,
+                            perfumes_done=10, perfumes_failed=0,
+                            stopped_reason=None)
+        hom_qua = (datetime.now().astimezone()
+                   - timedelta(days=1)).isoformat(timespec="seconds")
+        con = sqlite3.connect(st.dir / "s.db")
+        con.execute("UPDATE runs SET started_at = ? WHERE run_id = ?",
+                    (hom_qua, rid))
+        con.commit(); con.close()
+        assert st.state.ran_today("daily") is None
+
+
+
+def test_luot_thu_hai_trong_ngay_bi_bo_qua():
+    """ĐÚNG KỊCH BẢN ĐÃ XẢY RA, giờ có bài canh.
+
+    Lượt 18:00 chạy xong bằng bộ lịch bash. Bật DAG Airflow lên là nó lập tức tạo
+    một lượt cho khoảng vừa qua và crawl tiếp — site nhận gấp rưỡi lượng dự kiến.
+
+    Lượt thứ hai phải BỎ QUA mà không ra mạng, và phải nói rõ lý do.
+    """
+    with _Store() as s:
+        _seeded(s, 6)
+        r1 = daily.run_once(s.state, FakeScraper(), budget=2, max_brands=1,
+                            min_comments=0, out_dir=s.dir)
+        assert r1.perfumes_done > 0, "lượt đầu phải chạy thật"
+
+        lan2 = FakeScraper()
+        r2 = daily.run_once(s.state, lan2, budget=2, max_brands=1,
+                            min_comments=0, out_dir=s.dir)
+        assert r2.perfumes_done == 0
+        assert lan2.fake.calls == [], "lượt thứ hai trong ngày vẫn ra mạng"
+        assert r2.stopped_reason == "hôm nay đã chạy", r2.stopped_reason
 
 
 if __name__ == "__main__":

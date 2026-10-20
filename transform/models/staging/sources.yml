@@ -10,6 +10,7 @@ sources:
       external_location: "../data/silver/{name}.parquet"
     tables:
       - name: perfumes
+      - name: perfume_rating_history
       - name: perfume_accords
       - name: perfume_notes
       - name: perfume_wear

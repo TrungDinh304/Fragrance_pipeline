@@ -4,10 +4,13 @@
 -- note nào phổ biến, nên hàng nào có Musk cũng cao và bảng không nói thêm gì.
 -- Bảng KHÔNG đối xứng, và đó là chủ ý: "có Oud thì 60% có Musk" khác hẳn
 -- "có Musk thì 6% có Oud".
+--
+-- Đọc từ star schema: fct_perfume_note x dim_note. `distinct` bỏ tầng: cùng
+-- một note ở cả top lẫn base của một chai vẫn chỉ tính là chai đó có note ấy.
 with note_of as (
-    select distinct perfume_key, note
-    from {{ source('silver', 'perfume_notes') }}
-    where note is not null
+    select distinct n.perfume_sk as perfume_key, d.note_name as note
+    from {{ ref('fct_perfume_note') }} n
+    join {{ ref('dim_note') }} d using (note_sk)
 ),
 freq as (
     select note, count(*) as perfumes from note_of group by 1

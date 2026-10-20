@@ -6,17 +6,22 @@
 -- `catalog_perfumes` để NULL (không phải 0) khi chưa crawl mục lục hãng đó.
 -- "Chưa biết tổng" và "biết tổng, mới phủ 0%" là hai câu khác hẳn; trộn lại thì
 -- bảng này nói sai về đúng những hãng chưa đụng tới.
+--
+-- Đọc từ star schema: fct_catalog_listing (mục lục, factless) và
+-- fct_perfume_rating (đã crawl), cùng nhìn qua dim_brand.
 with catalog as (
-    select brand_name as brand, count(*) as catalog_perfumes
-    from {{ source('silver', 'brand_perfumes') }}
-    where brand_name is not null
+    select b.brand_name as brand, count(*) as catalog_perfumes
+    from {{ ref('fct_catalog_listing') }} c
+    join {{ ref('dim_brand') }} b using (brand_sk)
+    where b.brand_name is not null
     group by 1
 ),
 crawled as (
-    select brand, count(*) as detailed,
-           sum(coalesce(rating_count, 0)) as rating_votes
-    from {{ ref('stg_perfumes') }}
-    where brand is not null
+    select b.brand_name as brand, count(*) as detailed,
+           sum(coalesce(f.rating_count, 0)) as rating_votes
+    from {{ ref('fct_perfume_rating') }} f
+    join {{ ref('dim_brand') }} b using (brand_sk)
+    where b.brand_name is not null
     group by 1
 )
 select

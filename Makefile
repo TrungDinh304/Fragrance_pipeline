@@ -46,6 +46,14 @@ help:
 	@echo "make vectordb        Xem/nap kho vector (Postgres + pgvector)"
 	@echo "make api             Bat API + trang test chatbot (localhost:8000)"
 	@echo ""
+	@echo "Airflow (dieu phoi):"
+	@echo "make airflow-init    Lan dau: build anh + tao DB airflow"
+	@echo "make airflow-up      Bat Airflow (UI: localhost:8081)"
+	@echo "make airflow-check   Kiem DAG co nap duoc khong"
+	@echo "make airflow-logs    Xem log scheduler (stream)"
+	@echo "make airflow-log     Log thuc thi cua task (doc duoc)"
+	@echo "make airflow-down    Tat Airflow"
+	@echo ""
 	@echo "Docker (khong can cai Python/Chrome tren may):"
 	@echo "make docker-build    Build anh (co Google Chrome that ben trong)"
 	@echo "make docker-init     Bat MinIO + tao bucket (chay mot lan dau tien)"
@@ -88,8 +96,12 @@ silver:
 # tren Windows la cp1252 va chet ngay o dong tieng Viet dau tien trong
 # dbt_project.yml. DBT_TARGET_PATH thay cho target-path (dbt 1.12 da bo).
 DBT_ENV = PYTHONUTF8=1 DBT_PROFILES_DIR=.
+# Chot schema truoc khi goi dbt. Guard cu la `test -d data/silver`, chi thay thu
+# muc CO -- nen parquet dung bang code cu van di qua, roi dbt chet o model dau
+# tien voi `Binder Error: Referenced column ... not found` va 65 node sau SKIP.
+# `silver --check` doc truc tiep silver.TABLES, khong nhac lai schema o day.
 marts:
-	@test -d data/silver || { echo "LOI: chua co data/silver, chay 'make silver' truoc."; exit 1; }
+	$(CLI) silver --check
 	cd transform && $(DBT_ENV) $(PYTHON) -m dbt.cli.main build
 
 # Nhỏ giọt theo lịch. BUDGET/BRANDS ghi đè mặc định trong config.py.
@@ -125,6 +137,7 @@ test:
 	$(PYTHON) tests/test_pgvector.py
 	$(PYTHON) tests/test_llm.py
 	$(PYTHON) tests/test_chat.py
+	$(PYTHON) tests/test_airflow.py
 	$(PYTHON) tests/test_charts.py
 	$(PYTHON) tests/test_bronze.py
 	$(PYTHON) tests/test_warehouse.py
@@ -144,6 +157,46 @@ embed:
 
 vectordb:
 	$(CLI) vectordb $(if $(ARGS),$(ARGS),status)
+
+# --- Airflow: dieu phoi -----------------------------------------------------
+# MOT container (airflow standalone). Anh build tu scripts/airflow/.
+#
+# `exec -u airflow`: anh de USER root de start.sh chown duoc volume log roi ha
+# quyen. Nhung Airflow cai trong /home/airflow/.local nen goi `airflow` bang root
+# se ModuleNotFoundError.
+AF = $(COMPOSE) exec -u airflow airflow
+
+# Lan dau: tao database `airflow` trong Postgres dang co.
+# (migrate + tai khoan admin do start.sh lo, moi lan bat.)
+airflow-init:
+	$(COMPOSE) build airflow
+	$(COMPOSE) up airflow-db
+
+airflow-up:
+	$(COMPOSE) up -d airflow
+	@echo "UI Airflow: http://localhost:$${AIRFLOW_PORT:-8082}"
+
+airflow-down:
+	$(COMPOSE) stop airflow
+
+# Kiem DAG bang chinh Airflow + kiem anh perfume-intel co cu hon code khong.
+#
+# Phep kiem anh quan trong hon ve mat van hanh: Airflow chay task bang ANH, nen
+# sua code ma khong build lai thi lich cu chay ban cu va KHONG bao loi gi.
+airflow-check:
+	@$(PYTHON) scripts/check_image_fresh.py || true
+	$(AF) airflow dags list
+	$(AF) airflow dags list-import-errors
+
+airflow-logs:
+	$(COMPOSE) logs -f airflow
+
+# Log THUC THI cua mot task, dang doc duoc (Airflow 3 ghi log JSON-lines).
+#   make airflow-log
+#   make airflow-log ARGS="-d fragrantica_refresh -t vectordb_load"
+#   make airflow-log ARGS="--liet-ke"
+airflow-log:
+	$(COMPOSE) exec -u airflow airflow 	  python /opt/airflow/scripts/airflow_log.py $(ARGS)
 
 # Bat ca kho vector + API + trang test chatbot.
 api:

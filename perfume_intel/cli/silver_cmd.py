@@ -28,6 +28,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                         "(mặc định: data/raw/fragrantica)")
     p.add_argument("--out", type=Path,
                    help=f"Nơi ghi Parquet (mặc định: {config.SILVER_DIR})")
+    p.add_argument("--check", action="store_true",
+                   help="Chỉ kiểm bảng Parquet trên ổ có khớp schema hiện tại "
+                        "không rồi thoát (0 = khớp, 1 = lệch). Dùng làm chốt "
+                        "trước khi gọi dbt")
     p.add_argument("--sql", metavar="CÂU_LỆNH",
                    help="Chạy một câu SQL trên bảng silver rồi in kết quả "
                         "(không dựng lại bảng)")
@@ -54,6 +58,17 @@ def run(args: argparse.Namespace) -> int:
     from ..warehouse import silver
 
     out_dir = args.out or config.SILVER_DIR
+
+    # Chốt schema: đứng TRƯỚC `--sql` và trước mọi nhánh khác vì nó không dựng
+    # gì cả, chỉ đọc. Xem `silver.kiem_tra` để biết nó chặn lỗi gì.
+    if args.check:
+        lech = silver.kiem_tra(out_dir)
+        if lech:
+            print(silver.mo_ta_lech(lech, out_dir))
+            return 1
+        print(f"Bảng silver ở {out_dir} khớp schema hiện tại "
+              f"({len(silver.TABLES)} bảng).")
+        return 0
 
     if args.sql:
         if not Path(out_dir).exists():

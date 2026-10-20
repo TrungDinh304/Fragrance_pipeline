@@ -140,7 +140,8 @@ class PgVectorRetriever:
     @classmethod
     def load(cls, rows: Iterable[Row], embedder, con=None,
              dsn_: str | None = None, reset: bool = True,
-             prefix: str = "") -> "PgVectorRetriever":
+             prefix: str = "",
+             vectors: dict[str, tuple] | None = None) -> "PgVectorRetriever":
         """Nạp dữ liệu vào Postgres rồi trả về retriever đã sẵn sàng.
 
         NẠP, không phải DI TRÚ: nguồn sự thật vẫn là bronze/silver, nên dựng lại
@@ -177,10 +178,17 @@ class PgVectorRetriever:
 
         self = cls(con, embedder=embedder, model_id=embedder.model_id,
                    prefix=prefix)
-        self._nap(rows, dim)
+        self._nap(rows, dim, vectors)
         return self
 
-    def _nap(self, rows: list[Row], dim: int) -> None:
+    def _nap(self, rows: list[Row], dim: int,
+             vectors: dict[str, tuple] | None = None) -> None:
+        """`vectors` là vector đã sinh sẵn (từ Parquet). Không truyền thì tự sinh.
+
+        Nạp từ Parquet là đường CHÍNH: kho vector chỉ là nơi phục vụ, còn bản gốc
+        của vector nằm ở tầng silver. Tự sinh ở đây chỉ là đường dự phòng khi chưa
+        chạy `embed` — tiện, nhưng nó làm cùng một việc hai lần.
+        """
         from ..embedding.document import document
 
         from ..vectors.index import _usable
@@ -199,7 +207,17 @@ class PgVectorRetriever:
         # không thể lệch nhau về cách chấm điểm theo note.
         idf = features.build_idf([tho[k] for k in khoa_sap])
         tai_lieu = {k: document(tho[k]) for k in khoa_sap}
-        dac = self._embedder.embed_documents([tai_lieu[k] for k in khoa_sap])
+        if vectors is not None:
+            thieu = [k for k in khoa_sap if k not in vectors]
+            if thieu:
+                raise ValueError(
+                    f"Thiếu vector cho {len(thieu)} chai (vd {thieu[0][:60]}). "
+                    f"Chạy lại `perfume-intel embed` để sinh cho đủ.")
+            dac = [vectors[k] for k in khoa_sap]
+            log.info("Dùng %d vector có sẵn, không sinh lại.", len(dac))
+        else:
+            dac = self._embedder.embed_documents(
+                [tai_lieu[k] for k in khoa_sap])
 
         hang_v, hang_t = [], []
         for i, k in enumerate(khoa_sap):

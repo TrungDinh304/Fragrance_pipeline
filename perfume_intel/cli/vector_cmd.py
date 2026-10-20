@@ -46,6 +46,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     q.add_argument("--hashing", action="store_true",
                    help="Dùng embedder hashing (phải khớp với lúc `embed`)")
     q.add_argument("--dsn", help="Chuỗi kết nối Postgres (mặc định: PG_DSN)")
+    q.add_argument("--re-embed", dest="re_embed", action="store_true",
+                   help="Sinh lại vector thay vì đọc Parquet đã có")
     q.add_argument("--community", help="Thư mục bronze khi nạp")
     q.add_argument("-v", "--verbose", action="store_true")
     q.set_defaults(func=run_vectordb)
@@ -136,13 +138,45 @@ def _vdb_status(args, Retriever, PgUnavailable, dsn) -> int:
 
 
 def _vdb_load(args, Retriever, PgUnavailable, dsn) -> int:
-    from ..embedding.ports import EmbeddingUnavailable
+    """Nạp kho vector. ƯU TIÊN đọc Parquet đã sinh, không embed lại.
+
+    `docs/ARCHITECTURE.md` nói "vector store chỉ NẠP từ Parquet, không bao giờ là
+    nơi lưu gốc" — trước đây lệnh này embed lại từ bronze, tức là làm cùng một
+    việc hai lần (~45 giây) và nói khác điều tài liệu tuyên bố.
+
+    Thiếu Parquet thì vẫn tự sinh, nhưng báo rõ, vì lúc đó `embed` và lệnh này
+    không còn chung một tập vector.
+    """
+    from ..embedding import store
+    from ..embedding.ports import EmbeddingUnavailable, ModelMismatch
+
     rows = _rows(args)
     if rows is None:
         return 1
     try:
-        r = Retriever.load(rows, _embedder(args), dsn_=args.dsn)
-    except (PgUnavailable, EmbeddingUnavailable) as exc:
+        emb = _embedder(args)
+    except EmbeddingUnavailable as exc:
+        log.error("%s", exc)
+        return 1
+
+    vectors = None
+    if not args.re_embed:
+        try:
+            bo = store.read(expect_model=emb.model_id)
+            vectors = {i.key: i.vector for i in bo.items}
+            print(f"Dùng {len(vectors)} vector từ {store.TEN_FILE} "
+                  f"({bo.model_id}).")
+        except FileNotFoundError:
+            log.warning("Chưa có %s — sẽ sinh vector ngay tại đây. Chạy "
+                        "`perfume-intel embed` trước thì nhanh hơn và hai bên "
+                        "dùng chung một tập vector.", store.TEN_FILE)
+        except ModelMismatch as exc:
+            log.error("%s", exc)
+            return 1
+
+    try:
+        r = Retriever.load(rows, emb, dsn_=args.dsn, vectors=vectors)
+    except (PgUnavailable, EmbeddingUnavailable, ValueError) as exc:
         log.error("%s", exc)
         return 1
     print(f"Đã nạp {len(r)} chai vào kho vector.")

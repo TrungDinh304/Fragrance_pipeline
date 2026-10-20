@@ -410,6 +410,35 @@ class CrawlState:
         return chai, hang
 
     # ------------------------------------------------------------ lịch sử run
+    def ran_today(self, kind: str = "daily") -> dict | None:
+        """Lượt `kind` đã chạy xong hôm nay chưa (theo giờ địa phương)?
+
+        VÌ SAO BẢO VỆ NÀY Ở ĐÂY, KHÔNG Ở BỘ ĐIỀU PHỐI
+        Cùng lý do với `site_cooldown`: thứ cần bảo vệ là SITE, nên luật phải nằm
+        ở chỗ mọi đường đi đều phải qua — không phải ở một bộ lịch cụ thể.
+
+        Đã xảy ra thật: lượt 18:00 chạy xong bằng bộ lịch bash (144 request), rồi
+        bật DAG Airflow lên là nó lập tức tạo một lượt cho khoảng vừa qua và crawl
+        tiếp. `catchup=False` KHÔNG chặn việc đó — nó nghĩa là "chỉ khoảng gần
+        nhất", không phải "không khoảng nào". Hôm đó site nhận gấp rưỡi lượng dự
+        kiến.
+
+        Chỉ tính lượt đã KẾT THÚC và thực sự tiêu request: một lượt bị bỏ vì site
+        đang nghỉ không nên chặn lượt sau.
+        """
+        from datetime import datetime
+        hom_nay = datetime.now().astimezone().strftime("%Y-%m-%d")
+        with self._conn() as conn:
+            hang = conn.execute(
+                "SELECT run_id, started_at, finished_at, requests_used, "
+                "perfumes_done FROM runs "
+                "WHERE kind = ? AND finished_at IS NOT NULL "
+                "AND requests_used > 0 "
+                "AND date(started_at, 'localtime') = ? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (kind, hom_nay)).fetchone()
+        return dict(hang) if hang else None
+
     def start_run(self, kind: str, budget: int) -> str:
         # Có milli-giây: khoá chỉ tới giây thì hai lần chạy trong cùng một giây
         # sẽ trùng run_id và `INSERT OR REPLACE` XOÁ mất lần trước — lịch sử

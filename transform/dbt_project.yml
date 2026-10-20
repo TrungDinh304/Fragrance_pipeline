@@ -10,6 +10,7 @@ profile: perfume_intel
 
 model-paths: ["models"]
 test-paths: ["tests"]
+macro-paths: ["macros"]
 clean-targets: ["target", "dbt_packages"]
 # target-path cố ý KHÔNG khai ở đây: dbt 1.12 đã bỏ nó. Để dbt dùng mặc định
 # `transform/target/`, và KHÔNG trỏ vào data/: thư mục target là rác build, lại
@@ -22,6 +23,9 @@ models:
     staging:
       # View: chỉ đổi tên/ép kiểu, không đáng tốn chỗ lưu.
       +materialized: view
+    core:
+      # Star schema: dim_* và fct_*. Table vì mọi mart đọc lại nhiều lần.
+      +materialized: table
     marts:
       # Table: marts được đọc đi đọc lại, và phải chụp lại được trạng thái.
       +materialized: table

@@ -1,0 +1,178 @@
+version: 2
+
+# Star schema (Kimball). Mỗi fact khai rõ GRAIN và được test bằng
+# `unique_combination`; mọi khoá ngoại được test `relationships` sang dim --
+# fact trỏ vào hư không là lỗi im lặng kiểu tệ nhất: INNER JOIN rơi dòng mà
+# không ai biết.
+
+models:
+  # ------------------------------------------------------------------- dims
+  - name: dim_brand
+    description: Một dòng một hãng. Có thành viên inferred và thành viên -1.
+    columns:
+      - name: brand_sk
+        tests: [unique, not_null]
+      - name: brand_key
+        tests: [unique]
+
+  - name: dim_perfume
+    description: Một dòng một chai, cả chai đã crawl chi tiết lẫn chai mới thấy trong mục lục.
+    columns:
+      - name: perfume_sk
+        tests: [unique, not_null]
+      - name: perfume_key
+        tests: [unique, not_null]
+      - name: is_detailed
+        tests: [not_null]
+
+  - name: dim_accord
+    columns:
+      - name: accord_sk
+        tests: [unique, not_null]
+      - name: accord_name
+        tests: [unique, not_null]
+
+  - name: dim_note
+    columns:
+      - name: note_sk
+        tests: [unique, not_null]
+      - name: note_name
+        tests: [unique, not_null]
+
+  - name: dim_occasion
+    columns:
+      - name: occasion_sk
+        tests: [unique, not_null]
+      - name: occasion
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [winter, spring, summer, fall, day, night]
+
+  - name: dim_date
+    columns:
+      - name: date_sk
+        tests: [unique, not_null]
+
+  # ------------------------------------------------------------------ facts
+  - name: fct_perfume_rating
+    description: "Grain: một chai, trạng thái mới nhất."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk]
+    columns:
+      - name: perfume_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}
+      - name: brand_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_brand'), field: brand_sk}
+      - name: date_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_date'), field: date_sk}
+
+  - name: fct_rating_snapshot
+    description: "Grain: một chai x một lần crawl."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk, scraped_at]
+    columns:
+      - name: perfume_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}
+      - name: brand_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_brand'), field: brand_sk}
+      - name: date_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_date'), field: date_sk}
+
+  - name: fct_perfume_accord
+    description: "Grain: một chai x một accord."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk, accord_sk]
+    columns:
+      - name: perfume_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}
+      - name: brand_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_brand'), field: brand_sk}
+      - name: accord_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_accord'), field: accord_sk}
+
+  - name: fct_perfume_note
+    description: "Grain: một chai x một tầng x một note."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk, layer, note_sk]
+    columns:
+      - name: perfume_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}
+      - name: note_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_note'), field: note_sk}
+      - name: layer
+        tests:
+          - accepted_values:
+              arguments:
+                values: [top, middle, base, general]
+
+  - name: fct_perfume_wear
+    description: "Grain: một chai x một trục hoàn cảnh."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk, occasion_sk]
+    columns:
+      - name: perfume_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}
+      - name: occasion_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_occasion'), field: occasion_sk}
+
+  - name: fct_catalog_listing
+    description: "Grain: một chai trong mục lục hãng (factless)."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [perfume_sk]
+    columns:
+      - name: brand_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_brand'), field: brand_sk}
+      - name: perfume_sk
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_perfume'), field: perfume_sk}

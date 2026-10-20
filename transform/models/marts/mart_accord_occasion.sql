@@ -4,12 +4,17 @@
 -- khối vote riêng trên Fragrantica, mỗi khối tự quy về 100% của chính nó. Đem
 -- hai thang khác mẫu số lên cùng một bảng thì trục "day" cao đều ở mọi accord —
 -- trông như một phát hiện, thực ra chỉ là mẫu số khác.
+--
+-- Đọc từ star schema: hai fact cùng grain chai, nối qua perfume_sk.
 with cell as (
-    select a.accord, w.axis, w.kind, avg(w.percent) as pct,
-           count(distinct a.perfume_key) as perfumes
-    from {{ source('silver', 'perfume_accords') }} a
-    join {{ source('silver', 'perfume_wear') }} w using (perfume_key)
-    where w.percent is not null
+    select d.accord_name as accord, o.occasion as axis,
+           o.occasion_kind as kind, avg(w.vote_pct) as pct,
+           count(distinct a.perfume_sk) as perfumes
+    from {{ ref('fct_perfume_accord') }} a
+    join {{ ref('dim_accord') }} d using (accord_sk)
+    join {{ ref('fct_perfume_wear') }} w using (perfume_sk)
+    join {{ ref('dim_occasion') }} o using (occasion_sk)
+    where w.vote_pct is not null
     group by 1, 2, 3
 ),
 per_axis as (

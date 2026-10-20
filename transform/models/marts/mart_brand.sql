@@ -6,10 +6,19 @@
 --
 -- Công thức phải khớp ĐÚNG `analytics/metrics.py:_weighted_rating` — phía Python
 -- là bộ đối chứng, có test so từng dòng (tests/test_marts.py).
-with rated as (
+--
+-- Đọc từ star schema: fct_perfume_rating x dim_brand. Thành viên -1 (chai không
+-- có tên hãng) có brand_name NULL nên bị lọc như trước.
+with perfume as (
+    select b.brand_name as brand, f.rating, f.rating_count
+    from {{ ref('fct_perfume_rating') }} f
+    join {{ ref('dim_brand') }} b using (brand_sk)
+    where b.brand_name is not null
+),
+rated as (
     select brand, rating, coalesce(rating_count, 0) as votes
-    from {{ ref('stg_perfumes') }}
-    where brand is not null and rating is not null and rating > 0
+    from perfume
+    where rating is not null and rating > 0
 ),
 per_brand as (
     select
@@ -17,8 +26,7 @@ per_brand as (
         count(*)                                           as perfumes,
         sum(coalesce(rating_count, 0))                     as rating_votes,
         avg(rating)                                        as rating_avg
-    from {{ ref('stg_perfumes') }}
-    where brand is not null
+    from perfume
     group by 1
 ),
 weighted as (

@@ -53,7 +53,8 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
                  │ transform/ (dbt)                    ▲
   ┌──────────────▼───────────────┐                     │ bộ đối chứng
   │ GOLD   data/warehouse/*.duckdb├─────────────────────┘
-  │ 5 mart · 17 kiểm tra          │
+  │ star schema 6 dim · 6 fact    │
+  │ 5 mart · 69 kiểm tra          │
   └───────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────────────┐
@@ -67,6 +68,11 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
   ┌─────────────────────────────▼──────────────────────────────────┐
   │ ỨNG DỤNG    cli/  ·  api/ (FastAPI + trang test chatbot)       │
   │             llm/   ◄── CỔNG (9router, endpoint kiểu OpenAI)    │
+  └─────────────────────────────▲──────────────────────────────────┘
+                                │ DockerOperator: bật container từ ảnh
+  ┌─────────────────────────────┴──────────────────────────────────┐
+  │ ĐIỀU PHỐI   airflow/dags/  — Airflow 3, 2 DAG                  │
+  │             KHÔNG import perfume_intel, chỉ gọi CLI của ảnh    │
   └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,6 +87,8 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
 | Chỉ `core/lake.py` biết tới `core/objects.py` | tầng trên không được biết bronze nằm trên file hay trên S3 |
 | `cli/` **không** import `vectors/` | truy xuất phải đi qua cổng — có test canh |
 | `api/` chỉ nhìn thấy `Retriever` / `ChatModel` / `Embedder` | đổi backend nào cũng không phải sửa tầng API |
+| `airflow/dags/` **không** import `perfume_intel` | Airflow biết KHI NÀO; ảnh của project biết LÀM THẾ NÀO — hai thứ thay được độc lập |
+| DAG chạm mạng: `retries=0`, `catchup=False`, `max_active_runs=1` | ba mặc định của Airflow đều làm tăng tốc độ gõ cửa site; có test canh cả ba |
 | Đầu ra của LLM là **dữ liệu**, không phải lệnh | nhãn model bịa ra bị lọc qua `vocabulary()`; tên chai bịa ra bị `advise.verify()` soát |
 | `model_id` đi kèm MỌI vector | vector hai model vẫn cộng trừ được với nhau nhưng vô nghĩa, và không phát hiện được từ con số |
 | dbt đọc **silver**, không đọc bronze | khử trùng và đặt kiểu đã xong và đã có test |
@@ -100,6 +108,7 @@ trước + cache đọc. Xem [Data lake](#data-lake-minio--s3).
 | Embedding | **ONNX** (fastembed), KHÔNG torch | cùng model, ~250 MB thay vì ~2,5 GB |
 | Kho vector | **Postgres + pgvector** | mọi phép tính trong SQL, không nạp vào RAM |
 | Gọi AI | **9router** (endpoint kiểu OpenAI) | gộp 40+ nhà cung cấp; đổi sang API trực tiếp chỉ là đổi env |
+| Điều phối | **Airflow 3** + DockerOperator | chuẩn ngành; DAG là code, có lịch sử chạy; ảnh thực thi tách khỏi ảnh điều phối |
 | Biểu đồ | SVG tự sinh | không CDN ⇒ mở được offline sau nhiều năm |
 
 ## Data lake (MinIO / S3)
@@ -335,6 +344,53 @@ API thì mỗi tiến trình có một bộ phiên riêng.
 Một trang test báo lỗi trắng thì không test được gì — nên mỗi tầng thiếu đều phải
 nói ra là đang thiếu gì, rồi chạy tiếp bằng phần còn lại.
 
+## Điều phối: Airflow biết KHI NÀO, ảnh biết LÀM THẾ NÀO
+
+```
+fragrantica_crawl    cron theo RUN_AT      -> daily          (CHẠM MẠNG)
+fragrantica_refresh  asset perfume://bronze
+                     ├─ silver ─▶ marts
+                     ├─ analyze                (đọc thẳng bronze, cố ý)
+                     └─ embed  ─▶ vectordb
+```
+
+Airflow chạy `DockerOperator` trên chính ảnh `perfume-intel`. Không cài
+`perfume_intel` vào ảnh Airflow: Airflow ghim hàng trăm package, và trộn với
+dbt-duckdb + fastembed + playwright + Chrome là bài ràng buộc phiên bản không có
+lời giải bền. Ranh giới giữ được vì **DAG không import một dòng nào của project**.
+
+### Chạy theo ASSET, không theo giờ
+
+`fragrantica_refresh` khởi động khi `perfume://bronze` đổi. Đặt một giờ cố định
+sai theo cả hai chiều: chạy không khi lượt crawl bị site chặn, và chạy trước khi
+crawl xong vào hôm nó kéo dài.
+
+### Ba mặc định của Airflow đánh nhau với cơ chế lịch sự
+
+Phần nguy hiểm nhất của việc chuyển sang Airflow. Không cái nào gây lỗi — cả ba
+chỉ làm tốc độ gõ cửa Fragrantica tăng lên, và hậu quả hiện ra dưới dạng bị chặn.
+
+| Mặc định | Nếu để nguyên |
+|---|---|
+| `catchup=True` | lần đầu chạy xếp hàng **mọi** khoảng đã lỡ từ `start_date` |
+| `max_active_runs=16` | nhiều lượt cùng đọc một sổ ngân sách SQLite |
+| `retries > 0` | `daily` thoát mã 2 khi bị chặn; retry là **bị chặn rồi vẫn gõ tiếp** |
+
+Chuỗi offline thì ngược lại (`retries=2`): tất định, không chạm mạng, không tiêu
+ngân sách. `tests/test_airflow.py` canh cả hai chiều — bỏ retry ở chuỗi offline
+cũng làm test đỏ, để "đặt 0 cho hết" không qua được.
+
+### Cái giá, và chỗ nó đáng tiền
+
+**1 container** (~600 MB RAM) nhờ `airflow standalone`, vốn chạy đúng bốn thành
+phần mà bản compose mẫu tách rời. Với phần crawl — một task mỗi ngày — vòng lặp bash là
+đủ, và bản bash vẫn còn trong profile `legacy` làm đường lùi. Chỗ Airflow đáng
+tiền là chuỗi offline: 5 task có phụ thuộc thật, trước giờ phải chạy tay đúng thứ
+tự, giờ có đồ thị và lịch sử chạy.
+
+**Không bao giờ chạy cả hai bộ lịch.** Chúng dùng chung sổ ngân sách SQLite và mỗi
+bên đều tưởng mình còn đủ request.
+
 ## Quyết định đã chốt, kèm lý do
 
 | Quyết định | Lý do |
@@ -351,6 +407,13 @@ nói ra là đang thiếu gì, rồi chạy tiếp bằng phần còn lại.
 | Đường dẫn ngoài `data/raw/` **không bao giờ** chạm lake | chốt giữ cho ~270 test chạy trên thư mục tạm mà không đụng mạng; đã kiểm bằng cách chạy cả bộ test với `LAKE=s3` và đếm object trước/sau |
 | `boto3`, không phải SDK của MinIO | `import minio` sẽ neo project vào một nhà cung cấp ở ngay tầng thấp nhất |
 | Image MinIO pin theo **digest** | `minio/minio` trên Docker Hub đã không còn pull được; một repo đã đóng băng thì `latest` có thể bị gỡ |
+| Airflow chạy ảnh của project qua DockerOperator | không trộn phụ thuộc của Airflow với dbt/fastembed/playwright; ranh giới giữ được vì DAG không import gì |
+| Airflow chạy MỘT container (`standalone`), không bốn | standalone bật đúng bốn thành phần đó; tách rời chỉ thêm ~1 GB RAM và 4 chỗ phải trông |
+| Ảnh Airflow KHÔNG chứa phụ thuộc của project | `perfume-intel` đã có Chrome + model + dbt; nhân bản vào ảnh Airflow là thêm ~1 GB và hai bản phải giữ khớp nhau |
+| Metadata Airflow nằm trong Postgres đang có, database riêng | dựng Postgres thứ hai chỉ để chứa bảng Airflow là thêm một thứ phải sao lưu, đổi lấy không gì |
+| DAG mới mặc định TẠM DỪNG | vừa `up -d` xong mà DAG crawl tự chạy là gõ cửa site trước khi ai kịp đọc nó làm gì |
+| Bộ lịch bash giữ lại trong profile `legacy` | đường lùi thật; nhưng để nó chạy mặc định là hai bộ lịch cùng crawl |
+| `vectordb load` đọc Parquet thay vì embed lại | tài liệu đã tuyên bố "kho vector chỉ NẠP từ Parquet"; bản cũ làm cùng một việc hai lần (~45 giây) |
 | Phiên hội thoại giữ trong bộ nhớ, không vào Postgres | nó không dựng lại được nhưng cũng không còn giá trị sau khi đóng tab |
 | `ve_chai` không giải được thì HẠ cấp, không đoán | đoán cho ra một chai có thật, nên sai mà không ai phát hiện |
 | Lượt nói tiếp BỎ những chai đã hiện | truy vấn gần như không đổi nên kết quả lặp y nguyên |

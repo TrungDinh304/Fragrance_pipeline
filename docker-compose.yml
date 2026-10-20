@@ -55,6 +55,25 @@ x-ai-env: &ai-env
   LLM_MODEL: ${LLM_MODEL:-kr/claude-haiku-4.5}
   LLM_API_KEY: ${LLM_API_KEY:-}
 
+# Airflow. Dùng LocalExecutor nên KHÔNG cần redis/celery/worker/flower — bản
+# compose mẫu trên trang Airflow có chúng vì nó dựng sẵn cho CeleryExecutor.
+#
+# Metadata nằm trong CHÍNH Postgres đang có, ở một database riêng (`airflow`).
+# Dựng Postgres thứ hai chỉ để chứa bảng của Airflow là thêm một thứ phải sao lưu
+# và phải nâng cấp, đổi lấy không gì cả.
+# Airflow. MỘT container, chạy `airflow standalone` — trên Airflow 3 standalone
+# bật đúng bốn thành phần mà bản compose mẫu trên trang Airflow tách rời
+# (api-server, scheduler, dag-processor, triggerer). Gộp lại không mất gì và bớt
+# khoảng 1 GB RAM.
+#
+# Ảnh build từ scripts/airflow/, theo mẫu dùng chung của các project khác. Khác
+# một điểm: KHÔNG dựng venv phụ thuộc project trong ảnh này — xem lý do trong
+# scripts/airflow/Dockerfile.
+#
+# Metadata nằm trong CHÍNH Postgres đang có, ở database riêng (`airflow`). Dựng
+# Postgres thứ hai chỉ để chứa bảng của Airflow là thêm một thứ phải sao lưu và
+# phải nâng cấp, đổi lấy không gì cả.
+
 services:
   # --- data lake ---------------------------------------------------------------
   # MinIO nói đúng API S3, nên `core/objects.py` không có một dòng nào riêng cho
@@ -151,8 +170,16 @@ services:
       retries: 12
       start_period: 15s
   # --- chạy nền: nhỏ giọt mỗi ngày --------------------------------------------
+  # GIỮ LẠI làm đường lùi, KHÔNG chạy mặc định nữa — Airflow đã thay chỗ này.
+  #
+  # Nằm trong profile `legacy` nên `docker compose up -d` không đụng tới. Chạy cả
+  # hai cùng lúc là tự nhân đôi tốc độ gõ cửa site: chúng dùng chung sổ ngân sách
+  # SQLite và mỗi bên đều tưởng mình còn đủ 150 request.
+  #
+  #     docker compose --profile legacy up -d scheduler     (quay về bản cũ)
   scheduler:
     <<: *app
+    profiles: ["legacy"]
     container_name: perfume-intel-scheduler
     entrypoint: ["bash", "scripts/docker/scheduler.sh"]
     restart: unless-stopped
@@ -198,12 +225,14 @@ services:
   #   docker compose run --rm marts            (mặc định: build = chạy + test)
   #   docker compose run --rm marts run        (chỉ dựng, bỏ test)
   #   docker compose run --rm marts test
-  # Cần `silver` chạy trước, vì dbt đọc Parquet chứ không đọc JSONL thô.
+  # Cần `silver` chạy trước, vì dbt đọc Parquet chứ không đọc JSONL thô — và
+  # `scripts/marts.sh` chốt đúng chuyện đó trước khi gọi dbt (data/silver là bind
+  # mount từ host nên có thể cũ hơn code trong ảnh).
   marts:
     <<: *app
     profiles: ["cli"]
     working_dir: /app/transform
-    entrypoint: ["python", "-m", "dbt.cli.main"]
+    entrypoint: ["sh", "/app/scripts/marts.sh"]
     command: ["build"]
     environment:
       # dbt đọc YAML bằng encoding mặc định của hệ điều hành; thiếu dòng này thì
@@ -214,6 +243,130 @@ services:
       # dbt đọc Parquet trong ./data/silver (cache local), không đọc S3. Vẫn khai
       # biến lake để `silver` chạy trong service này kéo được bản mới về.
       <<: *lake-env
+
+  # --- Airflow: điều phối -----------------------------------------------------
+  # MỘT container (standalone). Lần đầu chạy `make airflow-init` để tạo database
+  # `airflow` trong Postgres; start.sh lo migrate + tài khoản admin mỗi lần bật.
+
+  # Tạo database `airflow` trong Postgres đang có. Script trong
+  # /docker-entrypoint-initdb.d chỉ chạy ở lần khởi tạo ĐẦU TIÊN của volume, mà
+  # volume này đã tồn tại từ trước — nên phải tạo bằng một lượt riêng.
+  airflow-db:
+    image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${PG_PASSWORD:-perfume-dev-only}
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        # KHÔNG dùng `\gexec`: đó là lệnh meta của psql, chỉ chạy qua stdin chứ
+        # không chạy với `-c`. Viết kiểu đó thì psql báo lỗi cú pháp, database
+        # không được tạo, mà script vẫn in "xong" và exit 0 — thành công giả.
+        if psql -h postgres -U "${PG_USER:-perfume}" -d "${PG_DB:-perfume}"                -tAc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1
+        then
+          echo "database airflow: da co"
+        else
+          createdb -h postgres -U "${PG_USER:-perfume}" airflow
+          echo "database airflow: vua tao"
+        fi
+    restart: "no"
+
+  airflow:
+    build:
+      context: ./scripts/airflow
+    image: perfume-intel-airflow:3.3.2
+    container_name: perfume-intel-airflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # CHỈ 127.0.0.1, không phải 0.0.0.0.
+      #
+      # Socket Docker được mount vào container này, nên ai đăng nhập được UI là
+      # có quyền ngang root trên máy host. Mặc định của Docker là bind mọi giao
+      # diện — tức là cả máy khác trong LAN cũng tới được, với mật khẩu mặc định
+      # `airflow/airflow`. Muốn mở ra ngoài thì đổi mật khẩu TRƯỚC, rồi sửa dòng
+      # này một cách có ý thức.
+      #
+      # 8082 chứ không phải 8080 (API chatbot) hay 8081 (project tiki-elt chiếm).
+      - "127.0.0.1:${AIRFLOW_PORT:-8082}:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      # `scripts/` để đọc log task bằng dòng lệnh (`make airflow-log`). Log nằm
+      # trong named volume nên chỉ container Airflow thấy được.
+      - ./scripts:/opt/airflow/scripts:ro
+      - airflow-logs:/opt/airflow/logs
+      # Socket Docker: Airflow chạy task bằng cách bật container từ ảnh của
+      # project. Đây là quyền ngang root trên máy host — chấp nhận được cho một
+      # bộ điều phối chạy local, KHÔNG chấp nhận được nếu mở cổng 8081 ra ngoài.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 9router chạy trên host. Trên Docker Desktop thì `host.docker.internal` có
+    # sẵn; trên Docker Engine Linux phải khai thêm, nên để sẵn cho cả hai.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # KHÔNG khai AUTH_MANAGER: `airflow standalone` ghi đè cứng nó thành
+      # SimpleAuthManager (os.environ[...] ngay trong standalone_command.py), nên
+      # khai FAB ở đây chỉ là một dòng nói sai sự thật. Xem scripts/airflow/start.sh.
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER:-airflow}:admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_passwords.json
+      # Worker của LocalExecutor gọi về execution API. Trong bản 4 container đây
+      # là http://airflow-apiserver:8080/execution/; gộp lại một container thì
+      # phải là localhost. THIẾU DÒNG NÀY thì task đổ với `httpcore.ConnectError:
+      # [Errno 111] Connection refused`, mà container vẫn "healthy" vì
+      # healthcheck chỉ hỏi api-server còn sống hay không.
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://localhost:8080/execution/"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-perfume}:${PG_PASSWORD:-perfume-dev-only}@postgres:5432/airflow
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-doi-chuoi-nay-truoc-khi-mo-ra-ngoai}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+      # Tắt DAG mẫu: 50 DAG ví dụ làm UI không đọc được và làm scheduler bận vô ích.
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      # DAG mới KHÔNG tự chạy. Bật tay sau khi đã đọc — nhất là DAG crawl, thứ
+      # chạm mạng thật.
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: ${TZ:-Asia/Ho_Chi_Minh}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      # Để `from _chung import lenh` chắc chắn chạy. Airflow tự thêm thư mục DAG
+      # vào sys.path khi nạp DAG, nhưng mọi công cụ khác (DagBag gọi tay, script
+      # kiểm) thì không — và lúc đó DAG "biến mất" kèm một ModuleNotFoundError ở
+      # chỗ không ai nhìn.
+      PYTHONPATH: /opt/airflow/dags
+      # Tài khoản đăng nhập, tất định qua start.sh.
+      #
+      # Tên biến phải TRÙNG KHỚP với tên `scripts/airflow/start.sh` đọc. Trước đây
+      # chỗ này khai `AIRFLOW_USER`/`AIRFLOW_PASSWORD` rồi map sang
+      # `AIRFLOW_ADMIN_*` — ba tên cho một thứ, và `.env.example` ghi tên thứ ba.
+      # Hậu quả: đặt `AIRFLOW_PASSWORD` trong .env thì không có tác dụng gì, còn
+      # `AIRFLOW_ADMIN_EMAIL` thì start.sh đọc mà compose không truyền nên nó
+      # không bao giờ tới được container.
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-airflow}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+      # --- biến cho DAG (xem airflow/dags/_chung.py) ---
+      # Đường dẫn trên MÁY HOST: daemon Docker phân giải mount theo đường dẫn
+      # host, không theo đường dẫn bên trong container Airflow.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:?Can dat HOST_PROJECT_DIR trong .env - duong dan project tren may host}
+      PERFUME_IMAGE: ${PERFUME_IMAGE:-perfume-intel:0.2.0}
+      COMPOSE_NETWORK: ${COMPOSE_NETWORK:-perfume-intel_default}
+      RUN_AT: ${RUN_AT:-18:00}
+      LAKE: ${LAKE:-s3}
+      PERFUME_S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-perfume}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-perfume-dev-only}
+      BRONZE_BUCKET: ${BRONZE_BUCKET:-bronze}
+      SILVER_BUCKET: ${SILVER_BUCKET:-silver}
+      PERFUME_PG_DSN: postgresql://${PG_USER:-perfume}:${PG_PASSWORD:-perfume-dev-only}@postgres:5432/${PG_DB:-perfume}
+      EMBED_MODEL: ${EMBED_MODEL:-}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 6
+      start_period: 120s
 
   # --- API + trang test chatbot -----------------------------------------------
   #   docker compose up -d api   ->  http://localhost:8000
@@ -268,6 +421,9 @@ services:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
 
 volumes:
+  # Log của Airflow. Dựng lại được, không cần sao lưu.
+  airflow-logs:
+
   # Kho vector. Dựng lại được từ Parquet nên không cần sao lưu.
   pg-data:
 

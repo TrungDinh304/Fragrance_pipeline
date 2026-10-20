@@ -190,7 +190,8 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
              max_brands: int = config.DAILY_BRANDS,
              out_dir: Path | None = None,
              fmt: str = "jsonl",
-             min_comments: int = config.DAILY_MIN_COMMENTS) -> DailyReport:
+             min_comments: int = config.DAILY_MIN_COMMENTS,
+             force: bool = False) -> DailyReport:
     """Chạy một lát ngân sách. `scraper.fetcher` dùng cho cả mục lục lẫn chi tiết."""
     out_dir = out_dir or config.raw_dir(SITE, bronze.PERFUME)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -206,6 +207,26 @@ def run_once(state: CrawlState, scraper: FragranticaScraper,
     # lượt này. Không có bước kiểm này thì lịch cứ thế lao vào đúng lúc site
     # đang khó chịu nhất — đã xảy ra thật: 23:12:14 site trả 429 lần cuối,
     # 23:12:19 `daily` bắt đầu gõ cửa tiếp.
+    # Hôm nay đã chạy xong một lát rồi? Thì thôi.
+    #
+    # Chặn ở ĐÂY chứ không ở bộ điều phối, vì thứ cần bảo vệ là site: luật phải
+    # nằm ở chỗ mọi đường đi đều qua. Bật một DAG Airflow lên là nó tạo ngay một
+    # lượt cho khoảng vừa qua, dù `catchup=False` — và lượt đó chồng lên lượt bộ
+    # lịch cũ vừa chạy xong.
+    da_chay = None if force else state.ran_today("daily")
+    if da_chay:
+        report.run_id = state.start_run("daily", budget)
+        report.stopped_reason = "hôm nay đã chạy"
+        log.warning(
+            "Bỏ lượt: hôm nay đã chạy xong lượt %s (lúc %s, tiêu %s request, "
+            "được %s chai). Dùng --force nếu thật sự muốn chạy thêm một lát.",
+            da_chay["run_id"], da_chay["started_at"],
+            da_chay["requests_used"], da_chay["perfumes_done"])
+        state.finish_run(report.run_id, requests_used=0, brands_touched=0,
+                         perfumes_done=0, perfumes_failed=0,
+                         stopped_reason=report.stopped_reason)
+        return report
+
     cooldown = state.site_cooldown(SITE)
     if cooldown:
         report.run_id = state.start_run("daily", budget)

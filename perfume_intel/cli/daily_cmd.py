@@ -41,6 +41,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                    help="Chỉ in việc sẽ làm, không ra mạng")
     p.add_argument("--db", type=Path,
                    help=f"Đường dẫn sổ (mặc định: {config.STATE_DB})")
+    p.add_argument("--force", action="store_true",
+                   help="Chạy thêm một lát dù hôm nay đã chạy xong. Mặc định "
+                        "mỗi ngày chỉ một lát — bảo vệ này nằm ở sổ trạng thái "
+                        "nên mọi bộ điều phối đều phải qua nó.")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=run)
 
@@ -90,7 +94,8 @@ def run(args: argparse.Namespace) -> int:
         report = daily.run_once(state, scraper, budget=args.budget,
                                 max_brands=args.brands, out_dir=args.out,
                                 fmt=args.format,
-                                min_comments=args.min_comments)
+                                min_comments=args.min_comments,
+                                force=args.force)
     except (RateLimited, Blocked) as exc:
         # run_once đã tự bắt và ghi cooldown; tới đây là trường hợp lọt lưới.
         log.error("%s", exc)

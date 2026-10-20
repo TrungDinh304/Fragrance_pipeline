@@ -1,23 +1,30 @@
 -- Accord nào đang phủ rộng và được chấm cao.
-with total as (select count(*) as n from {{ ref('stg_perfumes') }}),
+-- Đọc từ star schema: fct_perfume_accord x fct_perfume_rating (drill-across
+-- qua perfume_sk) x dim_accord.
+with total as (select count(*) as n from {{ ref('fct_perfume_rating') }}),
+accord_perfume as (
+    select d.accord_name as accord, a.perfume_sk, a.strength,
+           p.rating, p.rating_count
+    from {{ ref('fct_perfume_accord') }} a
+    join {{ ref('dim_accord') }} d using (accord_sk)
+    join {{ ref('fct_perfume_rating') }} p using (perfume_sk)
+),
 per_accord as (
     select
-        a.accord,
-        count(distinct a.perfume_key)              as perfumes,
-        avg(a.width)                               as avg_strength,
-        sum(coalesce(p.rating_count, 0))           as rating_votes
-    from {{ source('silver', 'perfume_accords') }} a
-    join {{ ref('stg_perfumes') }} p using (perfume_key)
+        accord,
+        count(distinct perfume_sk)                 as perfumes,
+        avg(strength)                              as avg_strength,
+        sum(coalesce(rating_count, 0))             as rating_votes
+    from accord_perfume
     group by 1
 ),
 weighted as (
-    select a.accord,
-           sum(p.rating * coalesce(p.rating_count, 0))
-               / nullif(sum(coalesce(p.rating_count, 0)), 0) as vote_weighted,
-           sum(coalesce(p.rating_count, 0))                  as rated_votes
-    from {{ source('silver', 'perfume_accords') }} a
-    join {{ ref('stg_perfumes') }} p using (perfume_key)
-    where p.rating is not null and p.rating > 0
+    select accord,
+           sum(rating * coalesce(rating_count, 0))
+               / nullif(sum(coalesce(rating_count, 0)), 0) as vote_weighted,
+           sum(coalesce(rating_count, 0))                  as rated_votes
+    from accord_perfume
+    where rating is not null and rating > 0
     group by 1
 )
 select

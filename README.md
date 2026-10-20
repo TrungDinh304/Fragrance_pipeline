@@ -31,7 +31,12 @@ bronze chạy **hoàn toàn offline**, sửa công thức rồi chạy lại bao
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  ỨNG DỤNG    cli/ (13 lệnh)  ·  api/ FastAPI  ·  trang test chatbot      │
+│  ĐIỀU PHỐI   Airflow 3.3 · 2 DAG · UI localhost:8082                     │
+│                DockerOperator — chạy chính ảnh perfume-intel             │
+└────────┬─────────────────────────────────────────────────────────────────┘
+         │ bật container từ ảnh của project
+┌────────▼─────────────────────────────────────────────────────────────────┐
+│  ỨNG DỤNG    cli/ (13 lệnh)  ·  api/ FastAPI  ·  trang chatbot           │
 │                llm/  9router — tách ý định + diễn đạt  ◄── CỔNG 5        │
 └────────┬─────────────────────────────────────────────────────────────────┘
          │ phụ thuộc:  retrieval/ports.py          ◄── CỔNG 4
@@ -93,7 +98,8 @@ Luật đi lại đầy đủ và lý do từng quyết định:
 | Embedding | **ONNX** (fastembed), KHÔNG torch | cùng model, ~250 MB thay vì ~2,5 GB |
 | Kho vector | **Postgres + pgvector** | mọi phép tính trong SQL; đã có Postgres thì không thêm hạ tầng |
 | Gọi AI | **9router** (endpoint kiểu OpenAI) | gộp 40+ nhà cung cấp; đổi sang API trực tiếp chỉ là đổi env |
-| Đóng gói | **Docker Compose** | 8 service, một lệnh bật |
+| Điều phối | **Airflow 3** + DockerOperator | Airflow biết KHI NÀO, ảnh project biết LÀM THẾ NÀO — thay được độc lập |
+| Đóng gói | **Docker Compose** | 12 service, một lệnh bật |
 | Test | **stdlib**, không framework | `python tests/test_x.py` chạy được ở mọi nơi; pytest là tuỳ chọn |
 
 ### Thứ cố ý CHƯA có
@@ -177,13 +183,20 @@ make queue                           # xem tiến độ, không ra mạng
 
 # --- offline ---
 make silver                          # bronze -> Parquet          [warehouse]
-make marts                           # dbt build -> 5 mart        [marts]
+make marts                           # dbt build -> star schema + 5 mart [marts]
 make analyze                         # chỉ số + report.html -> data/processed/<ngày>/
 make similar Angham                  # chai nào giống chai này
 make similar NOTES="oud,vanilla"     # chai nào nhiều note này nhất
 make mini                            # ghép bản mini
-make test                            # 18 bộ · 335 test · không cần mạng
+make test                            # 19 bộ · 346 test · không cần mạng
 make lake                            # datalake: hai bên đang có gì  [lake]
+
+# --- Airflow (điều phối) ---
+make airflow-init                    # lần đầu: DB + migration + tài khoản
+make airflow-up                      # bật Airflow (UI localhost:8082)
+make airflow-check                   # DAG có nạp được không
+make airflow-logs                    # log scheduler
+make airflow-down
 
 # --- Docker ---
 make docker-init                     # lần đầu: bật MinIO + tạo bucket
@@ -418,10 +431,16 @@ pip install -e ".[marts]"          # nặng hơn hẳn: ~35 gói
 make marts                          # dbt build -> data/warehouse/perfume.duckdb
 ```
 
-Năm mart: `mart_brand`, `mart_accord`, `mart_accord_occasion`, `mart_coverage`,
-`mart_note_pairs`. Kèm 17 test dbt (khoá duy nhất, không NULL, giá trị hợp lệ)
-và 3 test tự viết — một trong số đó kiểm *thị phần chú ý của mọi hãng cộng lại
-phải ra 100%*, thứ sẽ sai âm thầm nếu mẫu số bị tính trên một tập con.
+Hai tầng, không phải một. `models/core/` là **star schema** — 6 dim và 6 fact,
+khoá thay thế băm md5 nên dựng lại từ đầu thì khoá y nguyên; `models/marts/` là
+năm bảng trả lời câu hỏi, đọc từ core chứ không đọc lại staging: `mart_brand`,
+`mart_accord`, `mart_accord_occasion`, `mart_coverage`, `mart_note_pairs`.
+
+Kèm **69 test dbt**: 52 bài trên core (khoá duy nhất, không NULL, 16 bài
+`relationships` canh toàn vẹn tham chiếu fact→dim, `unique_combination` canh
+đúng grain từng fact), 14 trên mart, và 3 bài tự viết — một trong số đó kiểm
+*thị phần chú ý của mọi hãng cộng lại phải ra 100%*, thứ sẽ sai âm thầm nếu mẫu
+số bị tính trên một tập con.
 
 **`analytics/metrics.py` cố ý KHÔNG đổi một dòng — nó là bộ đối chứng.**
 `tests/test_warehouse.py` so từng dòng giữa mart và bản Python:
@@ -436,8 +455,17 @@ Công thức hiệu chỉnh Bayes viết lại bằng SQL rất dễ lệch ở 
 `rating > 0`, mà lệch kiểu đó không làm hỏng gì — chỉ làm bảng xếp hạng sai một
 cách rất thuyết phục.
 
-### Bốn cái bẫy đã gặp, ghi lại để khỏi gặp lại
+### Năm cái bẫy đã gặp, ghi lại để khỏi gặp lại
 
+- **`data/silver/*.parquet` có thể cũ hơn code dựng ra nó.** Thêm một cột vào
+  `silver.TABLES` rồi chạy `make marts` mà quên `make silver`: dbt đọc file cũ và
+  chết ở model đầu tiên với `Binder Error: Referenced column "brand_key" not
+  found`, 65 node sau chuyển sang SKIP nên bảng tổng kết trông như *chỉ 1 lỗi*.
+  Guard cũ là `test -d data/silver`, chỉ xem thư mục **có tồn tại** nên không
+  thấy gì. Giờ `make marts` chạy `perfume-intel silver --check` trước: nó so
+  schema Parquet trên ổ với chính `silver.TABLES` và nói rõ bảng nào thiếu cột
+  nào, phải chạy lệnh gì. Trong DAG thì `silver >> marts` lo việc này, và cả hai
+  task dùng cùng một ảnh nên code dựng với code đọc luôn cùng phiên bản.
 - **dbt đọc YAML bằng encoding của hệ điều hành.** Trên Windows là cp1252 nên nó
   chết ngay ở dòng tiếng Việt đầu tiên trong `dbt_project.yml`. `make marts` đặt
   sẵn `PYTHONUTF8=1`.
@@ -449,10 +477,10 @@ cách rất thuyết phục.
   `COPY` vào ảnh kèm đường dẫn của máy dựng. `docker compose run --rm marts` chết
   với `KeyError: dbt_duckdb://macros/columns.sql`. `.dockerignore` giờ loại
   `transform/target/` và `transform/logs/`.
-- **`PASS=24` ở dòng cuối KHÔNG phải số test.** Đó là tổng số node: 5 mart + 2
-  view + **17 test**. Đọc nhầm con số đó một lần rồi, và nó đã nằm sai trong tài
-  liệu suốt mấy tuần. Muốn số test thì đọc dòng `Finished running ... 17 data
-  tests`, hoặc `dbt ls --resource-type test`.
+- **`PASS=94` ở dòng cuối KHÔNG phải số test.** Đó là tổng số node: 17 table
+  (12 core + 5 mart) + 8 view staging + **69 test**. Đọc nhầm con số đó một lần
+  rồi, và nó đã nằm sai trong tài liệu suốt mấy tuần. Muốn số test thì đọc dòng
+  `Finished running ... 69 data tests`, hoặc `dbt ls --resource-type test`.
 
 ### Có cần tới mức này không
 
@@ -583,6 +611,169 @@ Vài điểm đã cân nhắc, để sau này không phải dò lại:
 - **Mỗi lần chỉ nên có một tiến trình ghi sổ.** SQLite mở ở chế độ WAL và có
   `timeout=30` nên đọc chồng nhau thì ổn, nhưng hai lượt `daily` cùng lúc là tự
   tạo tranh chấp không cần thiết.
+
+### Điều phối bằng Airflow
+
+```bash
+make docker-build
+make docker-init        # MinIO + bucket
+make airflow-init       # build ảnh Airflow + tạo DB `airflow`
+make airflow-up         # UI: http://localhost:8082  (airflow/airflow)
+```
+
+**MỘT container.** `airflow standalone` trên Airflow 3 chạy đúng bốn thành phần
+mà bản compose mẫu trên trang Airflow tách rời (api-server, scheduler,
+dag-processor, triggerer) — gộp lại không mất gì và bớt ~1 GB RAM. Ảnh build từ
+[`scripts/airflow/`](scripts/airflow/), theo mẫu dùng chung của các project khác.
+
+Đăng nhập: `airflow` / `airflow`, đặt trong `.env` qua `AIRFLOW_ADMIN_USER` /
+`AIRFLOW_ADMIN_PASSWORD`.
+
+**Airflow 3 `standalone` ghi đè cứng auth manager thành SimpleAuthManager** —
+`os.environ["AIRFLOW__CORE__AUTH_MANAGER"] = simple_auth_manager_classpath`, ngay
+trong `standalone_command.py`. Nên phần `airflow users create/reset-password` của
+bản mẫu (viết cho Airflow 2, nơi standalone dùng FAB) **không còn ảnh hưởng gì tới
+việc đăng nhập**: `airflow users list` hiện admin đầy đủ mà UI vẫn trả *"Invalid
+credentials"*. `start.sh` giờ ghi file JSON mật khẩu mà SimpleAuthManager đọc
+(`[core] simple_auth_manager_passwords_file`) — đạt đúng mục đích ban đầu của bản
+mẫu: thông tin đăng nhập tất định từ `.env`.
+
+Đánh đổi: SimpleAuthManager lưu mật khẩu **dạng plaintext** trong container, và
+chính Airflow cảnh báo nó không dành cho production. Vì vậy cổng UI chỉ bind
+`127.0.0.1` — xem dưới.
+
+`scripts/airflow/start.sh` lo ba thứ mà bản mẫu đã học được bằng cách gặp lỗi:
+
+| | Nếu không làm |
+|---|---|
+| `chown` volume log rồi mới hạ xuống UID 50000 | thư mục log cũ thuộc root → `PermissionError` trong DagFileProcessor → UI hiện **"0 DAGs"** dù `airflow dags list` vẫn đầy đủ |
+| Ghi file mật khẩu từ `.env` | `standalone` sinh mật khẩu ngẫu nhiên vào `standalone_admin_password.txt` — mà chính start.sh lại xoá file đó khi dọn PID → **không ai biết mật khẩu** |
+| Dọn file PID cũ | `airflow standalone` từ chối bật: *"Already running on PID ..."* |
+
+**Hai DAG**, và chúng khác nhau về bản chất chứ không chỉ về nội dung:
+
+| DAG | Lịch | Ý nghĩa |
+|---|---|---|
+| `fragrantica_crawl` | cron theo `RUN_AT` | một lát ngân sách/ngày — **chạm mạng** |
+| `fragrantica_refresh` | theo **asset** `perfume://bronze` | bronze → silver → gold + báo cáo + kho vector |
+
+```
+bronze ─┬─▶ silver ──▶ marts        Parquet có kiểu → 5 mart dbt
+        ├─▶ analyze                 đọc THẲNG bronze, cố ý
+        └─▶ embed  ──▶ vectordb     Parquet vector → nạp vào pgvector
+```
+
+`fragrantica_refresh` chạy **khi bronze đổi**, không theo giờ cố định. Đặt "19:00"
+sẽ sai theo cả hai chiều: chạy không khi lượt crawl bị site chặn, và chạy trước
+khi crawl xong vào hôm nó kéo dài.
+
+`analyze` **không** nối sau `silver` dù đồ thị trông gọn hơn: nó đọc thẳng bronze
+bằng Python thuần và là bên đối chứng độc lập cho dbt.
+
+#### Airflow điều phối, ảnh của project thực thi
+
+`DockerOperator` chạy chính ảnh `perfume-intel` — ảnh đã có Chrome, model ONNX,
+dbt. Không cài `perfume_intel` vào ảnh Airflow, vì Airflow ghim hàng trăm package
+và trộn với dbt-duckdb + fastembed + playwright là bài ràng buộc phiên bản không
+có lời giải bền. Ranh giới: **Airflow biết KHI NÀO và THEO THỨ TỰ NÀO; ảnh của
+project biết LÀM THẾ NÀO.**
+
+#### Ba mặc định của Airflow đánh nhau với cơ chế lịch sự
+
+Đây là phần nguy hiểm nhất của việc chuyển sang Airflow. Cả ba đều bị tắt tường
+minh ở DAG crawl, và mỗi cái có một bài test canh trong `tests/test_airflow.py`:
+
+| Mặc định | Nếu để nguyên |
+|---|---|
+| `catchup=True` | lần đầu chạy, Airflow xếp hàng **mọi** khoảng đã lỡ từ `start_date` → hàng chục lượt crawl cùng lúc |
+| `max_active_runs=16` | nhiều lượt cùng đọc một sổ ngân sách SQLite, mỗi bên tưởng còn đủ 150 request |
+| `retries > 0` | `daily` thoát mã 2 khi bị chặn; retry nghĩa là **bị chặn rồi vẫn gõ tiếp**, phá đúng sổ `site_cooldown` |
+
+Chuỗi offline thì ngược lại: `retries=2`, vì mọi task đều tất định, không chạm
+mạng, không tiêu ngân sách request.
+
+#### Đường lùi
+
+Bộ lên lịch bash cũ (`scripts/docker/scheduler.sh`) **vẫn còn**, chỉ chuyển vào
+profile `legacy`:
+
+```bash
+make airflow-down
+docker compose --profile legacy up -d scheduler
+```
+
+**Không bao giờ chạy cả hai.** Chúng dùng chung sổ ngân sách SQLite và mỗi bên đều
+tưởng mình còn đủ request — chạy song song là tự nhân đôi tốc độ gõ cửa site. Có
+một test canh việc `scheduler` phải nằm trong profile.
+
+#### Cái giá, nói thẳng
+
+Airflow thêm **1 container** (~600 MB RAM) nhờ `standalone`. Với phần crawl —
+một task mỗi ngày, 150 request — vòng lặp bash là đủ. Chỗ Airflow đáng tiền là
+**chuỗi offline**: 5 task có phụ thuộc thật, trước giờ phải chạy tay đúng thứ tự,
+giờ có đồ thị, có lịch sử chạy, và retry đúng chỗ an toàn.
+
+Ảnh Airflow **không** chứa phụ thuộc của project. Bản mẫu ở các project khác dựng
+một venv riêng (`/opt/project-venv`) để chạy crawler/dbt ngay trong container
+Airflow, vì bên đó không có ảnh runtime riêng. Project này thì có: `perfume-intel`
+đã chứa Chrome thật, model ONNX, dbt, duckdb. Nhân bản cả bộ đó vào ảnh Airflow là
+thêm ~1 GB và hai bản phụ thuộc phải giữ cho khớp nhau mãi.
+
+#### Xem log thực thi
+
+UI ở <http://localhost:8082> (`airflow/airflow`). Nhưng log của Airflow 3 là
+**JSON-lines**: một dòng thật dài 400+ ký tự mà nội dung chiếm chưa tới 20%, nên
+`tail`/`grep` trên file gần như không đọc được. Có công cụ đọc từ dòng lệnh:
+
+```bash
+make airflow-log                                         # lượt crawl gần nhất
+make airflow-log ARGS="--liet-ke"                        # liệt kê các lượt có log
+make airflow-log ARGS="-d fragrantica_refresh -t embed"  # task cụ thể
+make airflow-log ARGS="--loi"                            # chỉ warning/error
+make airflow-log ARGS="--so-dong 0"                      # đủ cả log
+```
+
+Log nằm trong named volume `airflow-logs` nên chỉ container Airflow thấy được —
+script chạy bên trong đó.
+
+#### UI chỉ mở trên localhost
+
+Socket Docker được mount vào container Airflow, nên **ai đăng nhập được UI là có
+quyền ngang root trên máy host**. Mặc định của Docker là bind mọi giao diện, tức
+máy khác trong LAN cũng tới được — với mật khẩu plaintext mặc định. Nên compose
+bind `127.0.0.1:8082` và có test canh điều đó.
+
+#### "healthy" không có nghĩa là task chạy được
+
+Healthcheck chỉ hỏi api-server còn sống hay không. Khi gộp 4 container thành 1,
+`AIRFLOW__CORE__EXECUTION_API_SERVER_URL` vẫn trỏ `http://airflow-apiserver:8080`
+— tên host không còn phân giải được, nên **mọi task đổ** với
+`httpcore.ConnectError: [Errno 111] Connection refused` trong khi container báo
+`healthy`. Điều phối "xanh" mà không chạy được gì.
+
+Giờ nó trỏ `localhost` và có test canh cả hai: thiếu dòng đó, hoặc trỏ về tên host
+cũ, đều làm test đỏ.
+
+#### Sửa code thì PHẢI build lại ảnh
+
+Airflow chạy task bằng **ảnh**, không bằng code trong repo. Sửa code mà không
+`make docker-build` thì lịch cứ chạy bản cũ, **không báo lỗi gì**.
+
+Đã dính thật: ảnh build 06/10, `vectordb load` sửa 16/10 để đọc Parquet thay vì
+embed lại. DAG chạy mỗi ngày vẫn embed lại (~90 giây thay vì 11 giây) suốt 10
+ngày — cả hai cách đều cho kết quả đúng, chỉ khác thời gian, nên không có dấu
+hiệu nào nhìn thấy được.
+
+`make airflow-check` giờ so thời gian build ảnh với thời gian sửa code và báo khi
+ảnh cũ. Ngoại lệ: `airflow/dags/` được **mount** lúc chạy nên sửa DAG có hiệu lực
+ngay, không cần build.
+
+#### Một cái bẫy của DockerOperator
+
+`mounts` được **daemon Docker** phân giải, không phải container Airflow — nên
+đường dẫn phải là đường dẫn trên **máy host** (`HOST_PROJECT_DIR` trong `.env`).
+Dùng đường dẫn trong container thì nó mount một thư mục rỗng: task vẫn chạy, vẫn
+exit 0, và không ghi được gì.
 
 ### Data lake trên MinIO
 
@@ -1257,7 +1448,7 @@ vào ruột, hoặc làm một máy mới báo sai là chưa có dữ liệu.
 ## Test
 
 ```powershell
-make test                      # 18 bộ · 335 test
+make test                      # 19 bộ · 346 test
 python tests\test_parsers.py   # hoặc từng bộ một
 python -m pytest tests/ -v     # nếu có cài pytest
 ```
@@ -1276,6 +1467,7 @@ python -m pytest tests/ -v     # nếu có cài pytest
 | `test_pgvector.py` | **Hợp đồng `Retriever` trên pgvector** + canh "tính toán nằm trong SQL, không trong RAM" |
 | `test_llm.py` | Tách ý định, giọng tư vấn, và ba lớp chặn model bịa — không gọi model thật |
 | `test_chat.py` | Hội thoại nhiều lượt: phiên, phân loại lượt, giải "chai thứ 2" |
+| `test_airflow.py` | DAG: canh ba mặc định Airflow có thể phá cơ chế lịch sự với site |
 | `test_analytics.py` | Nạp dữ liệu, các chỉ số, xuất báo cáo |
 | `test_charts.py` | Thang đo, màu, chú giải, cảnh báo khi dữ liệu mỏng |
 | `test_vectors.py` | Vector thưa: IDF, chuẩn hoá từng khối, chân dung hãng |

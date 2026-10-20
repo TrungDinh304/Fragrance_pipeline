@@ -7,5 +7,5 @@ select
     sum(rating * coalesce(rating_count, 0))
         / nullif(sum(coalesce(rating_count, 0)), 0) as overall,
     {{ var('prior_votes') }}                        as prior_votes
-from {{ source('silver', 'perfumes') }}
+from {{ ref('stg_perfumes') }}
 where rating is not null and rating > 0
